@@ -88,6 +88,9 @@ class Config:
     target_kl: float | None = 0.02
     max_grad_norm: float = 0.5
 
+    # --- Imitation / Distillation (optional) ---
+    distill_coef: float = 0.0
+
     # --- Runtime / checkpointing ---
     num_envs: int = 1  # parallel rollout environments (vectorized)
     total_updates: int = 2000

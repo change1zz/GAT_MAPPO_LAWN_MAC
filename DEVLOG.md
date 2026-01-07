@@ -72,3 +72,14 @@
   - Best checkpoint: `results/stable_best_track-20260107-174250/checkpoints/checkpoint_best.pth`
     - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.415 Mbps | coll 0.609 | jain 0.854`
     - `evaluate --policy argmax`: collapses to No-Tx (0 throughput); use sampling policy for deployment/eval.
+
+## 2026-01-07 (Branch exp/distill-greedy)
+
+- Goal: use a centralized GreedyColoring teacher to distill slot decisions into the same POMDP-local policy (no new observation features at inference).
+- Changes:
+  - Fix hierarchical entropy to use expected entropy: `H = H(tx) + p_tx * H(slot)` (`gac_mac/models/agent.py`).
+  - Add optional distillation loss (cross-entropy on greedy actions) controlled by `Config.distill_coef` / `--distill-coef` (`gac_mac/algo/buffer.py`, `gac_mac/algo/mappo.py`, `gac_mac/scripts/train.py`).
+  - Distillation uses SyncVectorEnv (in-process) so the trainer can access per-env teacher labels (it auto-disables `--parallel-env` when distill is enabled).
+- Reference run:
+  - `results/B_distill_greedy-20260107-233255/checkpoints/checkpoint_0200.pth`
+  - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.435 Mbps | coll 0.416 | jain 0.863`

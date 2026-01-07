@@ -48,6 +48,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--target-kl", type=float, default=None, help="Early stop PPO epochs if approx_kl exceeds this.")
+    p.add_argument("--distill-coef", type=float, default=None, help="Greedy-teacher distillation coefficient (0=off).")
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
@@ -113,6 +114,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "entropy_coef": float(args.entropy_coef)})
     if args.target_kl is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "target_kl": float(args.target_kl)})
+    if args.distill_coef is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "distill_coef": float(args.distill_coef)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
     if args.reward_collision is not None:
@@ -220,6 +223,13 @@ def main() -> None:
         )
 
     num_envs = int(max(1, cfg.num_envs))
+    if getattr(cfg, "distill_coef", 0.0) > 0.0 and args.env != "lawn":
+        raise ValueError("--distill-coef currently supports only --env lawn (greedy teacher uses PHY state).")
+    if getattr(cfg, "distill_coef", 0.0) > 0.0 and num_envs > 1 and args.parallel_env:
+        # For teacher labels we need access to each env instance, so force SyncVectorEnv.
+        print("[distill] disabling --parallel-env (teacher requires in-process env access)", flush=True)
+        args.parallel_env = False
+
     vec_env = None
     if num_envs > 1:
         from gac_mac.env.vector_env import SubprocVectorEnv, SyncVectorEnv
@@ -237,6 +247,12 @@ def main() -> None:
     action_dim = cfg.num_slots + 1
 
     import torch
+
+    greedy_teacher = None
+    if getattr(cfg, "distill_coef", 0.0) > 0.0:
+        from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
+
+        greedy_teacher = GreedyColoringAgent(cfg.num_slots)
 
     agent = GACMACAgent(
         input_dim=input_dim,
@@ -258,6 +274,7 @@ def main() -> None:
         value_loss_coef=cfg.value_loss_coef,
         entropy_coef=cfg.entropy_coef,
         target_kl=getattr(cfg, "target_kl", None),
+        distill_coef=getattr(cfg, "distill_coef", 0.0),
         max_grad_norm=cfg.max_grad_norm,
         device=device,
     )
@@ -330,6 +347,24 @@ def main() -> None:
                 edge_index = torch.tensor(obs.edge_index, dtype=torch.long, device=device)
                 edge_attr = torch.tensor(obs.edge_attr, dtype=torch.float32, device=device)
 
+            teacher_actions = None
+            if greedy_teacher is not None:
+                if num_envs > 1:
+                    # SyncVectorEnv exposes env instances for centralized teacher labels.
+                    envs = getattr(vec_env, "envs", None)
+                    if envs is None:
+                        raise RuntimeError("distillation requires SyncVectorEnv (do not use --parallel-env).")
+                    ta = []
+                    for e, ob in zip(envs, obs_list):
+                        ta.append(greedy_teacher.select_actions(env=e, obs_x=ob.x))
+                    teacher_actions = torch.tensor(np.stack(ta, axis=0).reshape(-1), dtype=torch.long, device=device)
+                else:
+                    teacher_actions = torch.tensor(
+                        greedy_teacher.select_actions(env=env, obs_x=obs.x).reshape(-1),
+                        dtype=torch.long,
+                        device=device,
+                    )
+
             h_in = h.detach()
             with torch.no_grad():
                 action_mask = None
@@ -392,6 +427,7 @@ def main() -> None:
                 rewards=rewards,
                 done=done_mask,
                 h_in=h_in,
+                teacher_actions=teacher_actions,
             )
 
             rollout_reward.append(float(rewards.mean().item()))

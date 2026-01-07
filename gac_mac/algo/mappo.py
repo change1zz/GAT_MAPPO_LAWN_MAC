@@ -33,6 +33,7 @@ class MAPPOTrainer:
         value_loss_coef: float,
         entropy_coef: float,
         target_kl: float | None = None,
+        distill_coef: float = 0.0,
         max_grad_norm: float,
         device: torch.device,
     ) -> None:
@@ -44,6 +45,7 @@ class MAPPOTrainer:
         self.value_loss_coef = float(value_loss_coef)
         self.entropy_coef = float(entropy_coef)
         self.target_kl = None if target_kl is None else float(target_kl)
+        self.distill_coef = float(distill_coef)
         self.max_grad_norm = float(max_grad_norm)
         self.device = device
 
@@ -78,6 +80,7 @@ class MAPPOTrainer:
                 new_logps: list[torch.Tensor] = []
                 values: list[torch.Tensor] = []
                 entropies: list[torch.Tensor] = []
+                distill_losses: list[torch.Tensor] = []
 
                 for t in range(seg_start, seg_end):
                     x_t = batch.x[t].to(self.device)
@@ -105,6 +108,16 @@ class MAPPOTrainer:
                     values.append(out.values)
                     entropies.append(out.entropy)
 
+                    if self.distill_coef > 0.0 and batch.teacher_actions is not None:
+                        # Distill from greedy teacher (labels only; policy input unchanged).
+                        teacher_t = batch.teacher_actions[t].to(self.device)
+                        with torch.no_grad():
+                            has_pkt = x_t[:, 3] > 0.0
+                        if has_pkt.any():
+                            logits = self.agent.action_logits(out.h_out)  # (N, A)
+                            ce = F.cross_entropy(logits[has_pkt], teacher_t[has_pkt], reduction="mean")
+                            distill_losses.append(ce)
+
                 new_logp_seg = torch.stack(new_logps, dim=0)  # (L,N)
                 values_seg = torch.stack(values, dim=0)  # (L,N)
                 entropy_seg = torch.stack(entropies, dim=0)  # (L,N)
@@ -121,7 +134,11 @@ class MAPPOTrainer:
                 value_loss = F.mse_loss(values_seg, ret_seg)
                 entropy = entropy_seg.mean()
 
-                loss = actor_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy
+                distill_loss = torch.zeros((), device=self.device)
+                if distill_losses:
+                    distill_loss = torch.stack(distill_losses).mean()
+
+                loss = actor_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy + self.distill_coef * distill_loss
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
