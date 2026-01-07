@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Outputs / artifacts
+results/
+backup/
+tmp_papers/
+
+# TensorBoard
+**/tb/
+**/events.out.tfevents.*
+
+# Checkpoints / figures
+*.pth
+*.pt
+*.png
+*.jpg
+*.jpeg
+
+# Papers (keep filenames locally, avoid huge binaries in git)
+baseline_paper/*.pdf
+
