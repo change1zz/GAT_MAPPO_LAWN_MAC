@@ -29,8 +29,8 @@ def _resolve_device(device: str) -> "object":
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Train GAC-MAC (M1 toy env).")
-    p.add_argument("--env", type=str, default="toy", choices=["toy", "lawn"])
+    p = argparse.ArgumentParser(description="Train GAC-MAC (toy or LAWN env).")
+    p.add_argument("--env", type=str, default="lawn", choices=["toy", "lawn"])
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--device", type=str, default=None, choices=["auto", "cpu", "cuda"])
     p.add_argument("--results-dir", type=str, default=None)
@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gat-heads", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--entropy-coef", type=float, default=None)
+    p.add_argument("--target-kl", type=float, default=None, help="Early stop PPO epochs if approx_kl exceeds this.")
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
@@ -110,6 +111,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "lr": float(args.lr)})
     if args.entropy_coef is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "entropy_coef": float(args.entropy_coef)})
+    if args.target_kl is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "target_kl": float(args.target_kl)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
     if args.reward_collision is not None:
@@ -166,6 +169,8 @@ def main() -> None:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
+            reward_repeat_success=cfg.reward_repeat_success,
+            reward_repeat_collision=cfg.reward_repeat_collision,
             lambda_coop=cfg.lambda_coop,
         )
     else:
@@ -209,6 +214,8 @@ def main() -> None:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
+            reward_repeat_success=cfg.reward_repeat_success,
+            reward_repeat_collision=cfg.reward_repeat_collision,
             lambda_coop=cfg.lambda_coop,
         )
 
@@ -250,6 +257,7 @@ def main() -> None:
         bptt_len=cfg.bptt_len,
         value_loss_coef=cfg.value_loss_coef,
         entropy_coef=cfg.entropy_coef,
+        target_kl=getattr(cfg, "target_kl", None),
         max_grad_norm=cfg.max_grad_norm,
         device=device,
     )
@@ -257,6 +265,7 @@ def main() -> None:
     start_update = 0
     global_step = 0
     rolling = {"reward": [], "sum_rate": [], "collision_rate": [], "avg_delay": []}
+    best = {"throughput_mbps_ma10": float("-inf"), "update": -1}
 
     if resume_ckpt is not None:
         missing, unexpected = agent.load_state_dict(resume_ckpt["agent_state_dict"], strict=False)
@@ -270,6 +279,8 @@ def main() -> None:
         global_step = int(resume_ckpt.get("global_step", 0))
         if isinstance(resume_ckpt.get("rolling"), dict):
             rolling = resume_ckpt["rolling"]
+        if isinstance(resume_ckpt.get("best"), dict):
+            best = resume_ckpt["best"]
 
     h = agent.initial_hidden(cfg.num_uavs * num_envs, device)
     buffer = RolloutBuffer()
@@ -308,6 +319,8 @@ def main() -> None:
         rollout_success = []
         rollout_collisions = []
         rollout_no_tx_frac_has_pkt = []
+        rollout_has_pkt_total = 0
+        rollout_action_counts_has_pkt = np.zeros((cfg.num_slots + 1,), dtype=np.int64)
 
         for _ in range(cfg.steps_per_update):
             if num_envs > 1:
@@ -362,6 +375,12 @@ def main() -> None:
                 if denom > 0:
                     no_tx = (action == cfg.num_slots) & has_pkt
                     rollout_no_tx_frac_has_pkt.append(float(no_tx.sum().item() / denom))
+                # Accumulate action histogram conditioned on having a packet.
+                n_has = int(has_pkt.sum().item())
+                if n_has > 0:
+                    rollout_has_pkt_total += n_has
+                    for a in range(cfg.num_slots + 1):
+                        rollout_action_counts_has_pkt[a] += int(((action == a) & has_pkt).sum().item())
 
             buffer.add(
                 x=x,
@@ -416,6 +435,26 @@ def main() -> None:
         rolling["collision_rate"].append(float(np.mean(rollout_collision)))
         rolling["avg_delay"].append(float(np.mean(rollout_delay)))
 
+        # Track best checkpoint by smoothed throughput (moving average over last 10 updates).
+        thr_series = rolling.get("throughput_mbps", [])
+        if thr_series:
+            ma10 = float(np.mean(thr_series[-10:]))
+            if ma10 > float(best.get("throughput_mbps_ma10", float("-inf"))):
+                best = {"throughput_mbps_ma10": ma10, "update": int(update + 1)}
+                best_path = os.path.join(ckpt_dir, "checkpoint_best.pth")
+                save_checkpoint(
+                    best_path,
+                    {
+                        "config": asdict(cfg),
+                        "update": update,
+                        "global_step": global_step,
+                        "agent_state_dict": agent.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "rolling": rolling,
+                        "best": best,
+                    },
+                )
+
         if writer is not None:
             writer.add_scalar("train/reward_mean", rolling["reward"][-1], update + 1)
             writer.add_scalar("train/sum_rate_mean", rolling["sum_rate"][-1], update + 1)
@@ -439,6 +478,30 @@ def main() -> None:
                     update + 1,
                 )
 
+            if rollout_has_pkt_total > 0:
+                denom = float(rollout_has_pkt_total)
+                writer.add_scalar(
+                    "policy/tx_frac_given_queue",
+                    float(rollout_action_counts_has_pkt[: cfg.num_slots].sum() / denom),
+                    update + 1,
+                )
+                writer.add_scalar(
+                    "policy/no_tx_frac_given_queue_hist",
+                    float(rollout_action_counts_has_pkt[cfg.num_slots] / denom),
+                    update + 1,
+                )
+                for s in range(cfg.num_slots):
+                    writer.add_scalar(
+                        f"policy/slot_frac_given_queue/{s}",
+                        float(rollout_action_counts_has_pkt[s] / denom),
+                        update + 1,
+                    )
+
+            writer.add_scalar("ppo/approx_kl", stats.approx_kl, update + 1)
+            writer.add_scalar("ppo/clip_frac", stats.clip_frac, update + 1)
+            writer.add_scalar("value/explained_variance", stats.explained_variance, update + 1)
+            writer.add_scalar("optim/grad_norm", stats.grad_norm, update + 1)
+
             writer.add_scalar("loss/total", stats.loss, update + 1)
             writer.add_scalar("loss/actor", stats.actor_loss, update + 1)
             writer.add_scalar("loss/value", stats.value_loss, update + 1)
@@ -450,6 +513,7 @@ def main() -> None:
                 f"R {rolling['reward'][-1]:+.3f} | "
                 f"rate {rolling['sum_rate'][-1]:.2f} (thr {rolling.get('throughput_mbps',[0])[-1]:.2f} Mbps) | "
                 f"coll {rolling['collision_rate'][-1]:.3f} | "
+                f"best_ma10 {float(best.get('throughput_mbps_ma10', 0.0)):.2f} Mbps@{int(best.get('update', -1))} | "
                 f"loss {stats.loss:.3f} (pi {stats.actor_loss:.3f}, v {stats.value_loss:.3f}, ent {stats.entropy:.3f})",
                 flush=True,
             )
@@ -465,6 +529,7 @@ def main() -> None:
                     "agent_state_dict": agent.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "rolling": rolling,
+                    "best": best,
                 },
             )
 

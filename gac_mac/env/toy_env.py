@@ -41,6 +41,8 @@ class ToyLawnEnv:
         reward_collision: float,
         reward_idle_empty: float,
         reward_idle_nonempty: float,
+        reward_repeat_success: float,
+        reward_repeat_collision: float,
         lambda_coop: float,
     ) -> None:
         self.N = int(num_uavs)
@@ -56,6 +58,8 @@ class ToyLawnEnv:
         self.reward_collision = float(reward_collision)
         self.reward_idle_empty = float(reward_idle_empty)
         self.reward_idle_nonempty = float(reward_idle_nonempty)
+        self.reward_repeat_success = float(reward_repeat_success)
+        self.reward_repeat_collision = float(reward_repeat_collision)
         self.lambda_coop = float(lambda_coop)
 
         self._rng = np.random.default_rng()
@@ -146,9 +150,8 @@ class ToyLawnEnv:
                 per_step_delays.append(self._packet_ages[i].pop(0))
             self.queues[i] -= 1
 
-        # --- Reward decomposition ---
+        # --- Reward: local performance + neighbor-average cooperative term ---
         r_perf = np.zeros((self.N,), dtype=np.float32)
-        r_pen = np.zeros((self.N,), dtype=np.float32)
 
         r_perf[success] = self.reward_success
 
@@ -157,8 +160,16 @@ class ToyLawnEnv:
         idle_nonempty = idle & has_pkt
 
         r_perf[idle_empty] = self.reward_idle_empty
-        r_pen[collision] = self.reward_collision
-        r_pen[idle_nonempty] = self.reward_idle_nonempty
+        r_perf[collision] = self.reward_collision
+        r_perf[idle_nonempty] = self.reward_idle_nonempty
+
+        if float(self.reward_repeat_success) != 0.0 or float(self.reward_repeat_collision) != 0.0:
+            prev_tx = self.last_actions < self.K
+            repeat_slot = tx_mask & prev_tx & (actions == self.last_actions)
+            prev_success = self.last_status == self.STATUS_SUCCESS
+            prev_collision = self.last_status == self.STATUS_COLLISION
+            r_perf[repeat_slot & prev_success] += self.reward_repeat_success
+            r_perf[repeat_slot & prev_collision] += self.reward_repeat_collision
 
         # Cooperative term over IN-neighbors: N_i = { j | j -> i }
         in_deg = adj.sum(axis=0).astype(np.float32)
@@ -167,7 +178,7 @@ class ToyLawnEnv:
         nonzero = in_deg > 0
         r_coop[nonzero] = self.lambda_coop * (coop_raw[nonzero] / in_deg[nonzero])
 
-        rewards = r_perf + r_pen + r_coop
+        rewards = r_perf + r_coop
 
         # Update last-action/status: only record actual transmission attempt (or No-Tx).
         effective_actions = actions.copy()

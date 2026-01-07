@@ -54,3 +54,21 @@
     - `results/lawn-big-v2-fixlast-20260106-220033/eval_phaseA.json`
 - Scaling benchmark improvements:
   - Adds Jain fairness trend to scaling plots as a 4th subplot when present (`gac_mac/scripts/benchmark_scaling.py`, `gac_mac/viz/plots.py`)
+
+## 2026-01-07 (Phase B: PPO Stability + Anti-Collapse)
+
+- Note: From this point forward, version backups are done via git commits/tags (no more directory copies).
+- PPO diagnostics + stability:
+  - Added PPO training diagnostics: `approx_kl`, `clip_frac`, `explained_variance`, `grad_norm` (`gac_mac/algo/mappo.py`) and logs them to TensorBoard (`gac_mac/scripts/train.py`).
+  - Added PPO KL-based early stopping within each update via `Config.target_kl` / `--target-kl` (`gac_mac/algo/mappo.py`, `gac_mac/scripts/train.py`).
+  - Added per-update action distribution logging (Tx/No-Tx and per-slot fractions conditioned on queue>0) to TensorBoard (`gac_mac/scripts/train.py`).
+- Reward refinements (to avoid “silence”/degenerate equilibria while remaining local-observation compatible):
+  - Cooperative reward now uses the full per-agent outcome reward `r_perf` (including collision/idle penalties), and total reward is `r_perf + r_coop` (`gac_mac/env/lawn_env.py`, `gac_mac/env/toy_env.py`).
+  - Added semi-persistent shaping: repeat the same slot after a previous success gets a bonus; repeating after a previous collision gets a penalty (`Config.reward_repeat_success`, `Config.reward_repeat_collision`) (`gac_mac/env/lawn_env.py`, `gac_mac/env/toy_env.py`).
+- Training robustness:
+  - Added automatic best-checkpoint tracking based on MA(10) of `throughput_mbps` and saving to `checkpoints/checkpoint_best.pth` (`gac_mac/scripts/train.py`).
+- Quick validation run (RTX 4070 Ti SUPER, `--num-envs 8 --parallel-env`, LAWN env):
+  - Run: `results/stable_best_track-20260107-174250/`
+  - Best checkpoint: `results/stable_best_track-20260107-174250/checkpoints/checkpoint_best.pth`
+    - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.415 Mbps | coll 0.609 | jain 0.854`
+    - `evaluate --policy argmax`: collapses to No-Tx (0 throughput); use sampling policy for deployment/eval.

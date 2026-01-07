@@ -28,6 +28,8 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
+            reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
+            reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
             lambda_coop=cfg.lambda_coop,
         )
 
@@ -71,6 +73,8 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
         reward_collision=cfg.reward_collision,
         reward_idle_empty=cfg.reward_idle_empty,
         reward_idle_nonempty=cfg.reward_idle_nonempty,
+        reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
+        reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
         lambda_coop=cfg.lambda_coop,
     )
 

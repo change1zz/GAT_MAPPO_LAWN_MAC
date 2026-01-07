@@ -17,8 +17,8 @@ class Config:
 
     # Actor/Critic behavior
     action_mask_empty_queue: bool = True  # enforce No-Tx when queue is empty
-    critic_mode: str = "global_mean"  # "node" | "global_mean" | "global"
-    policy_mode: str = "flat"  # "flat" (K+1 softmax) | "hierarchical" (Tx decision + slot choice)
+    critic_mode: str = "global"  # "node" | "global_mean" | "global"
+    policy_mode: str = "hierarchical"  # "flat" (K+1 softmax) | "hierarchical" (Tx decision + slot choice)
 
     # --- Environment (toy in M1; real in later milestones) ---
     num_uavs: int = 30
@@ -65,9 +65,11 @@ class Config:
     # Reward shaping
     reward_mode: str = "binary"  # "binary" | "rate" (use log2(1+SINR) on success)
     reward_success: float = 1.0
-    reward_collision: float = -2.0
+    reward_collision: float = -1.0
     reward_idle_empty: float = 0.1
-    reward_idle_nonempty: float = -0.5
+    reward_idle_nonempty: float = -1.0
+    reward_repeat_success: float = 0.2
+    reward_repeat_collision: float = -0.2
     lambda_coop: float = 0.5
 
     # --- Model ---
@@ -79,18 +81,19 @@ class Config:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
-    ppo_epochs: int = 4
+    ppo_epochs: int = 2
     bptt_len: int = 32  # truncated BPTT segment length
     value_loss_coef: float = 0.5
-    entropy_coef: float = 0.01
+    entropy_coef: float = 0.03
+    target_kl: float | None = 0.02
     max_grad_norm: float = 0.5
 
     # --- Runtime / checkpointing ---
     num_envs: int = 1  # parallel rollout environments (vectorized)
-    total_updates: int = 200
-    steps_per_update: int = 128  # environment steps collected per update
+    total_updates: int = 2000
+    steps_per_update: int = 256  # environment steps collected per update
     log_interval: int = 1
-    checkpoint_interval: int = 50
+    checkpoint_interval: int = 100
 
     # --- Evaluation ---
     eval_seeds: tuple[int, ...] = field(default_factory=lambda: tuple(123 + i for i in range(10)))

@@ -15,6 +15,10 @@ class UpdateStats:
     actor_loss: float
     value_loss: float
     entropy: float
+    approx_kl: float
+    clip_frac: float
+    explained_variance: float
+    grad_norm: float
 
 
 class MAPPOTrainer:
@@ -28,6 +32,7 @@ class MAPPOTrainer:
         bptt_len: int,
         value_loss_coef: float,
         entropy_coef: float,
+        target_kl: float | None = None,
         max_grad_norm: float,
         device: torch.device,
     ) -> None:
@@ -38,6 +43,7 @@ class MAPPOTrainer:
         self.bptt_len = int(bptt_len)
         self.value_loss_coef = float(value_loss_coef)
         self.entropy_coef = float(entropy_coef)
+        self.target_kl = None if target_kl is None else float(target_kl)
         self.max_grad_norm = float(max_grad_norm)
         self.device = device
 
@@ -54,8 +60,13 @@ class MAPPOTrainer:
         total_actor = 0.0
         total_value = 0.0
         total_entropy = 0.0
+        total_kl = 0.0
+        total_clip_frac = 0.0
+        total_ev = 0.0
+        total_grad_norm = 0.0
         steps = 0
 
+        stop_early = False
         for _epoch in range(self.ppo_epochs):
             seg_start = 0
             while seg_start < T:
@@ -114,16 +125,36 @@ class MAPPOTrainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
                 self.optimizer.step()
+
+                approx_kl = (old_logp_seg - new_logp_seg).mean()
+                clip_frac = ((ratio - 1.0).abs() > self.clip_eps).to(dtype=ratio.dtype).mean()
+
+                # Explained variance of critic: 1 - Var(y - yhat) / Var(y)
+                with torch.no_grad():
+                    y = ret_seg.view(-1)
+                    yhat = values_seg.view(-1)
+                    var_y = torch.var(y, unbiased=False)
+                    ev = 1.0 - torch.var(y - yhat, unbiased=False) / (var_y + 1e-8)
 
                 total_loss += float(loss.item())
                 total_actor += float(actor_loss.item())
                 total_value += float(value_loss.item())
                 total_entropy += float(entropy.item())
+                total_kl += float(approx_kl.item())
+                total_clip_frac += float(clip_frac.item())
+                total_ev += float(ev.item())
+                total_grad_norm += float(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm)
                 steps += 1
 
+                if self.target_kl is not None and float(approx_kl.item()) > self.target_kl:
+                    stop_early = True
+                    break
+
                 seg_start = seg_end
+            if stop_early:
+                break
 
         denom = max(1, steps)
         return UpdateStats(
@@ -131,4 +162,8 @@ class MAPPOTrainer:
             actor_loss=total_actor / denom,
             value_loss=total_value / denom,
             entropy=total_entropy / denom,
+            approx_kl=total_kl / denom,
+            clip_frac=total_clip_frac / denom,
+            explained_variance=total_ev / denom,
+            grad_norm=total_grad_norm / denom,
         )
