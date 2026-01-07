@@ -14,6 +14,7 @@ from gac_mac.env.traffic import PoissonTraffic
 @dataclass(frozen=True)
 class StepInfo:
     sum_rate: float
+    throughput_mbps: float
     collision_rate: float
     avg_delay: float
     tx_attempts: int
@@ -79,7 +80,8 @@ class LAWNEnv:
         self.cs_threshold_dbm = float(cs_threshold_dbm)
         self.sinr_threshold_db = float(sinr_threshold_db)
         self.sinr_threshold_lin = float(10.0 ** (self.sinr_threshold_db / 10.0))
-        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * bandwidth_hz)
+        self.bandwidth_hz = float(bandwidth_hz)
+        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * self.bandwidth_hz)
 
         self.reward_mode = str(reward_mode)
         self.reward_success = float(reward_success)
@@ -239,8 +241,14 @@ class LAWNEnv:
         attempts = int(tx_mask.sum())
         n_coll = int(collision.sum())
         sum_rate = float(np.log2(1.0 + sinr[success]).sum()) if np.any(success) else 0.0
+        from gac_mac.utils.metrics import spectral_eff_sum_to_mbps_per_frame
+
+        throughput_mbps = spectral_eff_sum_to_mbps_per_frame(
+            sum_rate, bandwidth_hz=self.bandwidth_hz, num_slots=self.K
+        )
         info = StepInfo(
             sum_rate=sum_rate,
+            throughput_mbps=throughput_mbps,
             collision_rate=float(n_coll / max(1, attempts)),
             avg_delay=float(np.mean(delays)) if delays else 0.0,
             tx_attempts=attempts,

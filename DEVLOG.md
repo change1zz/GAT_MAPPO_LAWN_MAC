@@ -29,3 +29,13 @@
     - `--policy argmax`: `sum_rate 60.833 | coll 0.493 | delay 24.888`
 - Experiments (hierarchical actor) did not outperform the current best within limited runs:
   - `results/lawn-v2-hier-20260107-121525/` and `results/lawn-v2-hier-tune-20260107-130018/` (kept for reference).
+
+## 2026-01-07 (Git + Mbps Metrics)
+
+- Git:
+  - Initial repo commit: `c442934` (tag: `pre-mbps-metric`)
+  - Added `.gitignore` to keep `results/`, `backup/`, `tmp_papers/` and large artifacts out of git.
+- Metrics:
+  - Added `throughput_mbps` to `LAWNEnv` step info, derived from `sum_rate * (bandwidth_hz/num_slots) / 1e6` (`gac_mac/utils/metrics.py`).
+  - Updated `train/evaluate/benchmark_scaling` to report and plot Mbps when available.
+  - Smoke check: `python -m gac_mac.scripts.train --env lawn --run-name smoke-mbps ...` shows logs like `thr X.XX Mbps`.

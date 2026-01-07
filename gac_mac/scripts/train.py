@@ -300,6 +300,7 @@ def main() -> None:
         # Collect on-policy rollout
         rollout_reward = []
         rollout_sum_rate = []
+        rollout_thr_mbps = []
         rollout_collision = []
         rollout_delay = []
         rollout_degree = []
@@ -335,6 +336,7 @@ def main() -> None:
                 )
                 done_mask = torch.tensor(done_mask_np, dtype=torch.float32, device=device)
                 info_rate = float(np.mean([i.get("sum_rate", 0.0) for i in infos]))
+                info_thr = float(np.mean([i.get("throughput_mbps", 0.0) for i in infos]))
                 info_coll = float(np.mean([i.get("collision_rate", 0.0) for i in infos]))
                 info_delay = float(np.mean([i.get("avg_delay", 0.0) for i in infos]))
                 info_deg = float(np.mean([i.get("avg_degree_in", 0.0) for i in infos]))
@@ -346,6 +348,7 @@ def main() -> None:
                 rewards = torch.tensor(rewards_np, dtype=torch.float32, device=device)
                 done_mask = torch.full_like(rewards, 1.0 if done else 0.0)
                 info_rate = float(info.get("sum_rate", 0.0))
+                info_thr = float(info.get("throughput_mbps", 0.0))
                 info_coll = float(info.get("collision_rate", 0.0))
                 info_delay = float(info.get("avg_delay", 0.0))
                 info_deg = float(info.get("avg_degree_in", 0.0))
@@ -374,6 +377,7 @@ def main() -> None:
 
             rollout_reward.append(float(rewards.mean().item()))
             rollout_sum_rate.append(info_rate)
+            rollout_thr_mbps.append(info_thr)
             rollout_collision.append(info_coll)
             rollout_delay.append(info_delay)
             rollout_degree.append(info_deg)
@@ -408,12 +412,15 @@ def main() -> None:
 
         rolling["reward"].append(float(np.mean(rollout_reward)))
         rolling["sum_rate"].append(float(np.mean(rollout_sum_rate)))
+        rolling.setdefault("throughput_mbps", []).append(float(np.mean(rollout_thr_mbps)) if rollout_thr_mbps else 0.0)
         rolling["collision_rate"].append(float(np.mean(rollout_collision)))
         rolling["avg_delay"].append(float(np.mean(rollout_delay)))
 
         if writer is not None:
             writer.add_scalar("train/reward_mean", rolling["reward"][-1], update + 1)
             writer.add_scalar("train/sum_rate_mean", rolling["sum_rate"][-1], update + 1)
+            if "throughput_mbps" in rolling:
+                writer.add_scalar("train/throughput_mbps_mean", rolling["throughput_mbps"][-1], update + 1)
             writer.add_scalar("train/collision_rate_mean", rolling["collision_rate"][-1], update + 1)
             writer.add_scalar("train/avg_delay_mean", rolling["avg_delay"][-1], update + 1)
 
@@ -441,7 +448,7 @@ def main() -> None:
             print(
                 f"upd {update+1:04d} | step {global_step:07d} | "
                 f"R {rolling['reward'][-1]:+.3f} | "
-                f"rate {rolling['sum_rate'][-1]:.2f} | "
+                f"rate {rolling['sum_rate'][-1]:.2f} (thr {rolling.get('throughput_mbps',[0])[-1]:.2f} Mbps) | "
                 f"coll {rolling['collision_rate'][-1]:.3f} | "
                 f"loss {stats.loss:.3f} (pi {stats.actor_loss:.3f}, v {stats.value_loss:.3f}, ent {stats.entropy:.3f})",
                 flush=True,

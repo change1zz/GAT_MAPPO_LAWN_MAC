@@ -98,13 +98,14 @@ def make_env(cfg: Config) -> LAWNEnv:
     )
 
 
-def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, float]:
+def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, float, float]:
     rng = np.random.default_rng(seed)
     obs = env.reset(seed=seed)
     if hasattr(policy_fn, "reset"):
         policy_fn.reset()  # type: ignore[attr-defined]
 
     rate_sum = 0.0
+    thr_sum = 0.0
     coll_sum = 0.0
     delay_sum = 0.0
 
@@ -112,12 +113,13 @@ def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, f
         actions = policy_fn(env, obs, rng)
         obs, _rew, done, info = env.step(actions)
         rate_sum += float(info["sum_rate"])
+        thr_sum += float(info.get("throughput_mbps", 0.0))
         coll_sum += float(info["collision_rate"])
         delay_sum += float(info["avg_delay"])
         if done:
             break
     denom = float(env.episode_len)
-    return rate_sum / denom, coll_sum / denom, delay_sum / denom
+    return rate_sum / denom, thr_sum / denom, coll_sum / denom, delay_sum / denom
 
 
 def main() -> None:
@@ -159,8 +161,8 @@ def main() -> None:
         mode_name: str, *, cfg_for_n, x_values: list[float], x_label: str, out_png: str
     ) -> dict[str, dict[str, list[float]]]:
         results_by_algo: dict[str, dict[str, list[float]]] = {
-            "GAC-MAC": {"sum_rate": [], "collision_rate": [], "avg_delay": []},
-            "Greedy": {"sum_rate": [], "collision_rate": [], "avg_delay": []},
+            "GAC-MAC": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": []},
+            "Greedy": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": []},
         }
 
         for idx, n in enumerate(ns):
@@ -199,33 +201,43 @@ def main() -> None:
                 return greedy.select_actions(env=_env, obs_x=obs.x)
 
             rates = []
+            thrs = []
             colls = []
             delays = []
             for ep in range(args.episodes):
-                r, c, d = _run_episode(env, gac_policy, seed=int(args.seed + ep))
+                r, thr, c, d = _run_episode(env, gac_policy, seed=int(args.seed + ep))
                 rates.append(r)
+                thrs.append(thr)
                 colls.append(c)
                 delays.append(d)
             results_by_algo["GAC-MAC"]["sum_rate"].append(float(np.mean(rates)))
+            results_by_algo["GAC-MAC"]["throughput_mbps"].append(float(np.mean(thrs)))
             results_by_algo["GAC-MAC"]["collision_rate"].append(float(np.mean(colls)))
             results_by_algo["GAC-MAC"]["avg_delay"].append(float(np.mean(delays)))
 
             rates = []
+            thrs = []
             colls = []
             delays = []
             for ep in range(args.episodes):
-                r, c, d = _run_episode(env, greedy_policy, seed=int(args.seed + ep))
+                r, thr, c, d = _run_episode(env, greedy_policy, seed=int(args.seed + ep))
                 rates.append(r)
+                thrs.append(thr)
                 colls.append(c)
                 delays.append(d)
             results_by_algo["Greedy"]["sum_rate"].append(float(np.mean(rates)))
+            results_by_algo["Greedy"]["throughput_mbps"].append(float(np.mean(thrs)))
             results_by_algo["Greedy"]["collision_rate"].append(float(np.mean(colls)))
             results_by_algo["Greedy"]["avg_delay"].append(float(np.mean(delays)))
 
             print(
                 f"[{mode_name}] x={x_values[idx]:.3f} N={n:3d} | "
-                f"GAC thr {results_by_algo['GAC-MAC']['sum_rate'][-1]:.3f} coll {results_by_algo['GAC-MAC']['collision_rate'][-1]:.3f} delay {results_by_algo['GAC-MAC']['avg_delay'][-1]:.3f} || "
-                f"Greedy thr {results_by_algo['Greedy']['sum_rate'][-1]:.3f} coll {results_by_algo['Greedy']['collision_rate'][-1]:.3f} delay {results_by_algo['Greedy']['avg_delay'][-1]:.3f}"
+                f"GAC {results_by_algo['GAC-MAC']['throughput_mbps'][-1]:.3f} Mbps "
+                f"(sum_rate {results_by_algo['GAC-MAC']['sum_rate'][-1]:.3f}) "
+                f"coll {results_by_algo['GAC-MAC']['collision_rate'][-1]:.3f} delay {results_by_algo['GAC-MAC']['avg_delay'][-1]:.3f} || "
+                f"Greedy {results_by_algo['Greedy']['throughput_mbps'][-1]:.3f} Mbps "
+                f"(sum_rate {results_by_algo['Greedy']['sum_rate'][-1]:.3f}) "
+                f"coll {results_by_algo['Greedy']['collision_rate'][-1]:.3f} delay {results_by_algo['Greedy']['avg_delay'][-1]:.3f}"
             )
 
         from gac_mac.viz.plots import plot_scaling_lines

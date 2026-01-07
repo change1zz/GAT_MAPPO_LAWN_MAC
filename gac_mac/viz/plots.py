@@ -50,7 +50,9 @@ def plot_eval_summary(results: list[dict[str, float]], save_path: str) -> None:
     import matplotlib.pyplot as plt
 
     names = [r["name"] for r in results]
-    sum_rates = [r["sum_rate"] for r in results]
+    # Prefer Mbps if present; fall back to sum spectral efficiency.
+    has_mbps = all("throughput_mbps" in r for r in results)
+    sum_rates = [r.get("throughput_mbps", r["sum_rate"]) for r in results]
     colls = [r["collision_rate"] for r in results]
 
     plt.figure(figsize=(10, 4))
@@ -58,7 +60,7 @@ def plot_eval_summary(results: list[dict[str, float]], save_path: str) -> None:
     plt.subplot(1, 2, 1)
     plt.bar(names, sum_rates, color="steelblue")
     plt.title("Mean Throughput")
-    plt.ylabel("bits/s/Hz per frame")
+    plt.ylabel("Mbps" if has_mbps else "bits/s/Hz per frame")
     plt.grid(True, axis="y", alpha=0.3)
 
     plt.subplot(1, 2, 2)
@@ -88,14 +90,16 @@ def plot_scaling_lines(
     ax2 = fig.add_subplot(1, 3, 2)
     ax3 = fig.add_subplot(1, 3, 3)
 
+    use_mbps = any("throughput_mbps" in m for m in results_by_algo.values())
     for name, metrics in results_by_algo.items():
-        ax1.plot(xs, metrics.get("sum_rate", []), marker="o", label=name)
+        y = metrics.get("throughput_mbps", metrics.get("sum_rate", []))
+        ax1.plot(xs, y, marker="o", label=name)
         ax2.plot(xs, metrics.get("avg_delay", []), marker="o", label=name)
         ax3.plot(xs, metrics.get("collision_rate", []), marker="o", label=name)
 
     ax1.set_title("Throughput")
     ax1.set_xlabel(x_label)
-    ax1.set_ylabel("bits/s/Hz per frame")
+    ax1.set_ylabel("Mbps" if use_mbps else "bits/s/Hz per frame")
     ax1.grid(True, alpha=0.3)
 
     ax2.set_title("Delay")
