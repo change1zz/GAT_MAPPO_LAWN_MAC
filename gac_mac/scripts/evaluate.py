@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 from dataclasses import asdict
 
 import numpy as np
@@ -39,11 +41,18 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--no-action-mask", action="store_true", help="Disable queue-based action masking.")
     p.add_argument(
+        "--seeds",
+        type=str,
+        default=None,
+        help="Comma-separated eval seeds (default: Config.eval_seeds).",
+    )
+    p.add_argument(
         "--deterministic",
         action="store_true",
         help="(deprecated) Equivalent to --policy argmax.",
     )
     p.add_argument("--out", type=str, default=None, help="Optional path to save a comparison png.")
+    p.add_argument("--json-out", type=str, default=None, help="Optional path to save detailed metrics json.")
     return p.parse_args()
 
 
@@ -100,17 +109,31 @@ def make_env(cfg: Config) -> LAWNEnv:
     )
 
 
-def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: int) -> dict[str, float]:
-    env = make_env(cfg)
-    rng = np.random.default_rng(base_seed)
+def _percentiles(x: np.ndarray, ps=(10, 50, 90)) -> dict[str, float]:
+    if x.size == 0:
+        return {f"p{p}": 0.0 for p in ps}
+    return {f"p{p}": float(np.percentile(x, p)) for p in ps}
 
-    ep_rates = []
+
+def run_policy(name: str, policy_fn, *, cfg: Config, seeds: list[int]) -> dict[str, object]:
+    env = make_env(cfg)
+
+    ep_sum_rate = []
     ep_thr_mbps = []
     ep_colls = []
     ep_delays = []
+    ep_jain = []
 
-    for ep in range(episodes):
-        seed = int(base_seed + ep)
+    per_seed_per_node_thr: dict[int, list[float]] = {}
+    per_seed_per_node_success: dict[int, list[int]] = {}
+    per_seed_per_node_attempt: dict[int, list[int]] = {}
+    per_seed_per_node_collision: dict[int, list[int]] = {}
+    per_seed_per_node_delay_means: dict[int, list[float]] = {}
+
+    from gac_mac.utils.metrics import jain_index
+
+    for seed in seeds:
+        rng = np.random.default_rng(int(seed))
         obs = env.reset(seed=seed)
         if hasattr(policy_fn, "reset"):
             policy_fn.reset()  # type: ignore[attr-defined]
@@ -120,6 +143,12 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
         coll_sum = 0.0
         delay_sum = 0.0
 
+        per_node_thr = np.zeros((cfg.num_uavs,), dtype=np.float64)
+        per_node_attempt = np.zeros((cfg.num_uavs,), dtype=np.int64)
+        per_node_success = np.zeros((cfg.num_uavs,), dtype=np.int64)
+        per_node_collision = np.zeros((cfg.num_uavs,), dtype=np.int64)
+        per_node_delays: list[list[float]] = [[] for _ in range(cfg.num_uavs)]
+
         for _t in range(cfg.episode_len):
             actions = policy_fn(env, obs, rng)
             obs, _rew, done, info = env.step(actions)
@@ -127,20 +156,58 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
             thr_sum += float(info.get("throughput_mbps", 0.0))
             coll_sum += float(info["collision_rate"])
             delay_sum += float(info["avg_delay"])
+
+            if "per_node_throughput_mbps" in info:
+                per_node_thr += np.asarray(info["per_node_throughput_mbps"], dtype=np.float64)
+            if "per_node_tx_attempt" in info:
+                per_node_attempt += np.asarray(info["per_node_tx_attempt"], dtype=np.int64)
+            if "per_node_tx_success" in info:
+                per_node_success += np.asarray(info["per_node_tx_success"], dtype=np.int64)
+            if "per_node_tx_collision" in info:
+                per_node_collision += np.asarray(info["per_node_tx_collision"], dtype=np.int64)
+            if "per_node_delay_served" in info:
+                d = np.asarray(info["per_node_delay_served"], dtype=np.float32)
+                idx = np.where(~np.isnan(d))[0]
+                for i in idx:
+                    per_node_delays[int(i)].append(float(d[int(i)]))
+
             if done:
                 break
 
-        ep_rates.append(rate_sum / cfg.episode_len)
+        per_node_thr_mean = per_node_thr / float(cfg.episode_len)
+        jain = jain_index(per_node_thr_mean)
+
+        per_seed_per_node_thr[int(seed)] = per_node_thr_mean.astype(np.float64).tolist()
+        per_seed_per_node_attempt[int(seed)] = per_node_attempt.astype(np.int64).tolist()
+        per_seed_per_node_success[int(seed)] = per_node_success.astype(np.int64).tolist()
+        per_seed_per_node_collision[int(seed)] = per_node_collision.astype(np.int64).tolist()
+
+        per_node_delay_mean = np.array(
+            [float(np.mean(v)) if v else float("nan") for v in per_node_delays], dtype=np.float64
+        )
+        per_seed_per_node_delay_means[int(seed)] = per_node_delay_mean.tolist()
+
+        ep_sum_rate.append(rate_sum / cfg.episode_len)
         ep_thr_mbps.append(thr_sum / cfg.episode_len)
         ep_colls.append(coll_sum / cfg.episode_len)
         ep_delays.append(delay_sum / cfg.episode_len)
+        ep_jain.append(float(jain))
 
     return {
         "name": name,
-        "sum_rate": float(np.mean(ep_rates)),
+        "seeds": [int(s) for s in seeds],
         "throughput_mbps": float(np.mean(ep_thr_mbps)),
+        "sum_rate": float(np.mean(ep_sum_rate)),
         "collision_rate": float(np.mean(ep_colls)),
         "avg_delay": float(np.mean(ep_delays)),
+        "jain_throughput": float(np.mean(ep_jain)),
+        "throughput_mbps_percentiles": _percentiles(np.asarray(ep_thr_mbps, dtype=np.float32)),
+        "jain_percentiles": _percentiles(np.asarray(ep_jain, dtype=np.float32)),
+        "per_seed_per_node_throughput_mbps": per_seed_per_node_thr,
+        "per_seed_per_node_tx_attempts": per_seed_per_node_attempt,
+        "per_seed_per_node_tx_success": per_seed_per_node_success,
+        "per_seed_per_node_tx_collision": per_seed_per_node_collision,
+        "per_seed_per_node_delay_mean": per_seed_per_node_delay_means,
     }
 
 
@@ -156,6 +223,14 @@ def main() -> None:
     cfg = Config(**cfg_dict)
     if args.cs_threshold_dbm is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "cs_threshold_dbm": float(args.cs_threshold_dbm)})
+
+    if args.seeds:
+        seeds = [int(x.strip()) for x in args.seeds.split(",") if x.strip()]
+    else:
+        seeds = list(getattr(cfg, "eval_seeds", [args.seed + i for i in range(args.episodes)]))
+    if args.episodes is not None and args.seeds is None:
+        # Keep backward compatibility: episodes controls how many seeds to take from the list.
+        seeds = seeds[: int(args.episodes)]
 
     device = _resolve_device(args.device)
     env_for_shape = make_env(cfg)
@@ -231,25 +306,56 @@ def main() -> None:
         # Use env.last_status as ACK feedback.
         return csma_agent.select_actions(obs.x, env.last_status, rng)
 
-    results = []
-    results.append(run_policy("GAC-MAC", gac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
-    results.append(run_policy("Random", random_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
-    results.append(run_policy("Greedy", greedy_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    results: list[dict[str, object]] = []
+    results.append(run_policy("GAC-MAC", gac_policy, cfg=cfg, seeds=seeds))
+    results.append(run_policy("Random", random_policy, cfg=cfg, seeds=seeds))
+    results.append(run_policy("Greedy", greedy_policy, cfg=cfg, seeds=seeds))
     csma_policy.reset = csma_agent.reset  # type: ignore[attr-defined]
-    results.append(run_policy("CSMA", csma_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    results.append(run_policy("CSMA", csma_policy, cfg=cfg, seeds=seeds))
 
     print("=== Evaluation (mean over episodes) ===")
     for r in results:
         print(
-            f"{r['name']:7s} | thr {r.get('throughput_mbps', 0.0):.3f} Mbps | "
-            f"sum_rate {r['sum_rate']:.3f} | coll {r['collision_rate']:.3f} | delay {r['avg_delay']:.3f}"
+            f"{str(r['name']):7s} | thr {float(r.get('throughput_mbps', 0.0)):.3f} Mbps | "
+            f"jain {float(r.get('jain_throughput', 0.0)):.3f} | "
+            f"sum_rate {float(r['sum_rate']):.3f} | coll {float(r['collision_rate']):.3f} | delay {float(r['avg_delay']):.3f}"
         )
 
     if args.out:
         from gac_mac.viz.plots import plot_eval_summary
 
-        plot_eval_summary(results, args.out)
+        # plot_eval_summary expects float dicts; pass a compact view.
+        compact = [
+            {
+                "name": str(r["name"]),
+                "throughput_mbps": float(r.get("throughput_mbps", 0.0)),
+                "sum_rate": float(r.get("sum_rate", 0.0)),
+                "collision_rate": float(r.get("collision_rate", 0.0)),
+                "avg_delay": float(r.get("avg_delay", 0.0)),
+                "jain_throughput": float(r.get("jain_throughput", 0.0)),
+            }
+            for r in results
+        ]
+        plot_eval_summary(compact, args.out)
         print(f"saved: {args.out}")
+
+    json_out = args.json_out
+    if json_out is None and args.out:
+        json_out = os.path.splitext(args.out)[0] + ".json"
+    if json_out:
+        os.makedirs(os.path.dirname(os.path.abspath(json_out)), exist_ok=True)
+        with open(json_out, "w", encoding="utf-8") as f:
+            json.dump(
+                {
+                    "checkpoint": os.path.abspath(args.checkpoint),
+                    "seeds": seeds,
+                    "config": asdict(cfg),
+                    "results": results,
+                },
+                f,
+                indent=2,
+            )
+        print(f"saved: {json_out}")
 
 
 if __name__ == "__main__":

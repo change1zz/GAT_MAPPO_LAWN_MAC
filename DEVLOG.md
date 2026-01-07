@@ -39,3 +39,18 @@
   - Added `throughput_mbps` to `LAWNEnv` step info, derived from `sum_rate * (bandwidth_hz/num_slots) / 1e6` (`gac_mac/utils/metrics.py`).
   - Updated `train/evaluate/benchmark_scaling` to report and plot Mbps when available.
   - Smoke check: `python -m gac_mac.scripts.train --env lawn --run-name smoke-mbps ...` shows logs like `thr X.XX Mbps`.
+
+## 2026-01-07 (Phase A: Evaluation + Fairness)
+
+- Git backup tag before changes: `pre-phase-a-metrics` (at `490bcac`)
+- Added per-node evaluation signals to env step info (does not change observation):
+  - `per_node_throughput_mbps`, `per_node_tx_attempt`, `per_node_tx_success`, `per_node_tx_collision`, `per_node_delay_served` (`gac_mac/env/lawn_env.py`, `gac_mac/env/traffic.py`)
+- Added Jain fairness metric (Mbps-based): `jain_index()` (`gac_mac/utils/metrics.py`)
+- Evaluation improvements:
+  - Default fixed eval seeds: `Config.eval_seeds = [123..132]` (`gac_mac/config.py`)
+  - `evaluate.py` now reports throughput Mbps + Jain, and saves a detailed JSON including per-seed per-node vectors when `--out` is used.
+  - Example outputs:
+    - `results/lawn-big-v2-fixlast-20260106-220033/eval_phaseA.png`
+    - `results/lawn-big-v2-fixlast-20260106-220033/eval_phaseA.json`
+- Scaling benchmark improvements:
+  - Adds Jain fairness trend to scaling plots as a 4th subplot when present (`gac_mac/scripts/benchmark_scaling.py`, `gac_mac/viz/plots.py`)

@@ -98,7 +98,7 @@ def make_env(cfg: Config) -> LAWNEnv:
     )
 
 
-def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, float, float]:
+def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, float, float, np.ndarray]:
     rng = np.random.default_rng(seed)
     obs = env.reset(seed=seed)
     if hasattr(policy_fn, "reset"):
@@ -108,6 +108,7 @@ def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, f
     thr_sum = 0.0
     coll_sum = 0.0
     delay_sum = 0.0
+    per_node_thr = np.zeros((env.N,), dtype=np.float64)
 
     for _t in range(env.episode_len):
         actions = policy_fn(env, obs, rng)
@@ -116,10 +117,12 @@ def _run_episode(env: LAWNEnv, policy_fn, *, seed: int) -> tuple[float, float, f
         thr_sum += float(info.get("throughput_mbps", 0.0))
         coll_sum += float(info["collision_rate"])
         delay_sum += float(info["avg_delay"])
+        if "per_node_throughput_mbps" in info:
+            per_node_thr += np.asarray(info["per_node_throughput_mbps"], dtype=np.float64)
         if done:
             break
     denom = float(env.episode_len)
-    return rate_sum / denom, thr_sum / denom, coll_sum / denom, delay_sum / denom
+    return rate_sum / denom, thr_sum / denom, coll_sum / denom, delay_sum / denom, (per_node_thr / denom)
 
 
 def main() -> None:
@@ -161,8 +164,8 @@ def main() -> None:
         mode_name: str, *, cfg_for_n, x_values: list[float], x_label: str, out_png: str
     ) -> dict[str, dict[str, list[float]]]:
         results_by_algo: dict[str, dict[str, list[float]]] = {
-            "GAC-MAC": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": []},
-            "Greedy": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": []},
+            "GAC-MAC": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": [], "jain_throughput": []},
+            "Greedy": {"sum_rate": [], "throughput_mbps": [], "collision_rate": [], "avg_delay": [], "jain_throughput": []},
         }
 
         for idx, n in enumerate(ns):
@@ -204,39 +207,51 @@ def main() -> None:
             thrs = []
             colls = []
             delays = []
+            jains = []
             for ep in range(args.episodes):
-                r, thr, c, d = _run_episode(env, gac_policy, seed=int(args.seed + ep))
+                r, thr, c, d, per_node_thr = _run_episode(env, gac_policy, seed=int(args.seed + ep))
                 rates.append(r)
                 thrs.append(thr)
                 colls.append(c)
                 delays.append(d)
+                from gac_mac.utils.metrics import jain_index
+
+                jains.append(float(jain_index(per_node_thr)))
             results_by_algo["GAC-MAC"]["sum_rate"].append(float(np.mean(rates)))
             results_by_algo["GAC-MAC"]["throughput_mbps"].append(float(np.mean(thrs)))
             results_by_algo["GAC-MAC"]["collision_rate"].append(float(np.mean(colls)))
             results_by_algo["GAC-MAC"]["avg_delay"].append(float(np.mean(delays)))
+            results_by_algo["GAC-MAC"]["jain_throughput"].append(float(np.mean(jains)))
 
             rates = []
             thrs = []
             colls = []
             delays = []
+            jains = []
             for ep in range(args.episodes):
-                r, thr, c, d = _run_episode(env, greedy_policy, seed=int(args.seed + ep))
+                r, thr, c, d, per_node_thr = _run_episode(env, greedy_policy, seed=int(args.seed + ep))
                 rates.append(r)
                 thrs.append(thr)
                 colls.append(c)
                 delays.append(d)
+                from gac_mac.utils.metrics import jain_index
+
+                jains.append(float(jain_index(per_node_thr)))
             results_by_algo["Greedy"]["sum_rate"].append(float(np.mean(rates)))
             results_by_algo["Greedy"]["throughput_mbps"].append(float(np.mean(thrs)))
             results_by_algo["Greedy"]["collision_rate"].append(float(np.mean(colls)))
             results_by_algo["Greedy"]["avg_delay"].append(float(np.mean(delays)))
+            results_by_algo["Greedy"]["jain_throughput"].append(float(np.mean(jains)))
 
             print(
                 f"[{mode_name}] x={x_values[idx]:.3f} N={n:3d} | "
                 f"GAC {results_by_algo['GAC-MAC']['throughput_mbps'][-1]:.3f} Mbps "
                 f"(sum_rate {results_by_algo['GAC-MAC']['sum_rate'][-1]:.3f}) "
+                f"jain {results_by_algo['GAC-MAC']['jain_throughput'][-1]:.3f} "
                 f"coll {results_by_algo['GAC-MAC']['collision_rate'][-1]:.3f} delay {results_by_algo['GAC-MAC']['avg_delay'][-1]:.3f} || "
                 f"Greedy {results_by_algo['Greedy']['throughput_mbps'][-1]:.3f} Mbps "
                 f"(sum_rate {results_by_algo['Greedy']['sum_rate'][-1]:.3f}) "
+                f"jain {results_by_algo['Greedy']['jain_throughput'][-1]:.3f} "
                 f"coll {results_by_algo['Greedy']['collision_rate'][-1]:.3f} delay {results_by_algo['Greedy']['avg_delay'][-1]:.3f}"
             )
 

@@ -189,7 +189,7 @@ class LAWNEnv:
         success = tx_mask & (sinr >= self.sinr_threshold_lin)
         collision = tx_mask & (~success)
 
-        delays = self.traffic.serve_successes(success_mask=success, t=frame_t)
+        delays, per_node_delay = self.traffic.serve_successes_with_per_node_delay(success_mask=success, t=frame_t)
 
         # --- Rewards ---
         r_perf = np.zeros((self.N,), dtype=np.float32)
@@ -240,12 +240,16 @@ class LAWNEnv:
         # Metrics
         attempts = int(tx_mask.sum())
         n_coll = int(collision.sum())
-        sum_rate = float(np.log2(1.0 + sinr[success]).sum()) if np.any(success) else 0.0
+        per_node_se = np.zeros((self.N,), dtype=np.float32)
+        if np.any(success):
+            per_node_se[success] = np.log2(1.0 + sinr[success]).astype(np.float32)
+        sum_rate = float(per_node_se.sum())
         from gac_mac.utils.metrics import spectral_eff_sum_to_mbps_per_frame
 
         throughput_mbps = spectral_eff_sum_to_mbps_per_frame(
             sum_rate, bandwidth_hz=self.bandwidth_hz, num_slots=self.K
         )
+        per_node_thr_mbps = (per_node_se * (self.bandwidth_hz / float(self.K)) / 1e6).astype(np.float32)
         info = StepInfo(
             sum_rate=sum_rate,
             throughput_mbps=throughput_mbps,
@@ -256,7 +260,17 @@ class LAWNEnv:
             tx_collision=n_coll,
             avg_degree_in=float(in_deg.mean()),
         )
-        return self._get_obs(), rewards, done, {"t": self._t, **info.__dict__}
+        return self._get_obs(), rewards, done, {
+            "t": self._t,
+            **info.__dict__,
+            # Per-node episode accounting (for evaluation only; policy doesn't need this).
+            "per_node_spectral_eff": per_node_se,
+            "per_node_throughput_mbps": per_node_thr_mbps,
+            "per_node_tx_attempt": tx_mask.astype(np.uint8),
+            "per_node_tx_success": success.astype(np.uint8),
+            "per_node_tx_collision": collision.astype(np.uint8),
+            "per_node_delay_served": per_node_delay,
+        }
 
     def _get_obs(self) -> GraphObs:
         if self._ch is None:

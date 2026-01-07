@@ -54,19 +54,27 @@ def plot_eval_summary(results: list[dict[str, float]], save_path: str) -> None:
     has_mbps = all("throughput_mbps" in r for r in results)
     sum_rates = [r.get("throughput_mbps", r["sum_rate"]) for r in results]
     colls = [r["collision_rate"] for r in results]
+    jains = [r.get("jain_throughput", 0.0) for r in results]
 
-    plt.figure(figsize=(10, 4))
+    plt.figure(figsize=(14, 4))
 
-    plt.subplot(1, 2, 1)
+    plt.subplot(1, 3, 1)
     plt.bar(names, sum_rates, color="steelblue")
     plt.title("Mean Throughput")
     plt.ylabel("Mbps" if has_mbps else "bits/s/Hz per frame")
     plt.grid(True, axis="y", alpha=0.3)
 
-    plt.subplot(1, 2, 2)
+    plt.subplot(1, 3, 2)
     plt.bar(names, colls, color="salmon")
     plt.title("Mean Collision Rate")
     plt.ylabel("fraction")
+    plt.ylim(0.0, 1.0)
+    plt.grid(True, axis="y", alpha=0.3)
+
+    plt.subplot(1, 3, 3)
+    plt.bar(names, jains, color="seagreen")
+    plt.title("Jain Fairness (Throughput)")
+    plt.ylabel("index")
     plt.ylim(0.0, 1.0)
     plt.grid(True, axis="y", alpha=0.3)
 
@@ -84,11 +92,14 @@ def plot_scaling_lines(
 ) -> None:
     import matplotlib.pyplot as plt
 
-    fig = plt.figure(figsize=(14, 4))
+    has_jain = any("jain_throughput" in m for m in results_by_algo.values())
+    fig = plt.figure(figsize=(18, 4) if has_jain else (14, 4))
 
-    ax1 = fig.add_subplot(1, 3, 1)
-    ax2 = fig.add_subplot(1, 3, 2)
-    ax3 = fig.add_subplot(1, 3, 3)
+    cols = 4 if has_jain else 3
+    ax1 = fig.add_subplot(1, cols, 1)
+    ax2 = fig.add_subplot(1, cols, 2)
+    ax3 = fig.add_subplot(1, cols, 3)
+    ax4 = fig.add_subplot(1, cols, 4) if has_jain else None
 
     use_mbps = any("throughput_mbps" in m for m in results_by_algo.values())
     for name, metrics in results_by_algo.items():
@@ -96,6 +107,8 @@ def plot_scaling_lines(
         ax1.plot(xs, y, marker="o", label=name)
         ax2.plot(xs, metrics.get("avg_delay", []), marker="o", label=name)
         ax3.plot(xs, metrics.get("collision_rate", []), marker="o", label=name)
+        if ax4 is not None:
+            ax4.plot(xs, metrics.get("jain_throughput", []), marker="o", label=name)
 
     ax1.set_title("Throughput")
     ax1.set_xlabel(x_label)
@@ -112,6 +125,13 @@ def plot_scaling_lines(
     ax3.set_ylabel("fraction")
     ax3.set_ylim(0.0, 1.0)
     ax3.grid(True, alpha=0.3)
+
+    if ax4 is not None:
+        ax4.set_title("Jain Fairness")
+        ax4.set_xlabel(x_label)
+        ax4.set_ylabel("index")
+        ax4.set_ylim(0.0, 1.0)
+        ax4.grid(True, alpha=0.3)
 
     ax1.legend(loc="best")
     plt.tight_layout()

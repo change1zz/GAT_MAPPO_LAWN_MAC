@@ -23,3 +23,23 @@ def spectral_eff_sum_to_mbps_per_frame(
         return 0.0
     return float(sum_rate_bits_per_s_hz_per_frame) * float(bandwidth_hz) / float(num_slots) / 1e6
 
+
+def jain_index(x) -> float:
+    """Jain's fairness index for non-negative quantities.
+
+    Returns 0 for empty/all-zero inputs.
+    """
+
+    import numpy as np
+
+    arr = np.asarray(x, dtype=np.float64).reshape(-1)
+    if arr.size == 0:
+        return 0.0
+    arr = np.maximum(arr, 0.0)
+    s1 = float(arr.sum())
+    if s1 <= 0.0:
+        return 0.0
+    s2 = float((arr * arr).sum())
+    if s2 <= 0.0:
+        return 0.0
+    return float((s1 * s1) / (float(arr.size) * s2))

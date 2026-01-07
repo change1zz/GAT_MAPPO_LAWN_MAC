@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -91,3 +91,6 @@ class Config:
     steps_per_update: int = 128  # environment steps collected per update
     log_interval: int = 1
     checkpoint_interval: int = 50
+
+    # --- Evaluation ---
+    eval_seeds: tuple[int, ...] = field(default_factory=lambda: tuple(123 + i for i in range(10)))
