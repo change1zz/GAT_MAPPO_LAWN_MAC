@@ -72,3 +72,13 @@
   - Best checkpoint: `results/stable_best_track-20260107-174250/checkpoints/checkpoint_best.pth`
     - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.415 Mbps | coll 0.609 | jain 0.854`
     - `evaluate --policy argmax`: collapses to No-Tx (0 throughput); use sampling policy for deployment/eval.
+
+## 2026-01-07 (Branch exp/static-shaping-strong)
+
+- Goal: (1) fix hierarchical entropy regularization to avoid No-Tx collapse; (2) add a static “try-transmit” shaping term (no curriculum).
+- Changes:
+  - Fix hierarchical entropy to use expected entropy: `H = H(tx) + p_tx * H(slot)` (instead of conditioning on sampled/selected Tx) (`gac_mac/models/agent.py`).
+  - Add `Config.reward_tx_attempt` and apply it to any transmission attempt with backlog (`gac_mac/env/lawn_env.py`, `gac_mac/env/toy_env.py` + wiring).
+- Reference run:
+  - `results/A_static_shaping_strong-20260107-230434/checkpoints/checkpoint_best.pth`
+  - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.310 Mbps | coll 0.619 | jain 0.850`

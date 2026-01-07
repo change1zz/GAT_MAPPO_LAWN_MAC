@@ -129,7 +129,10 @@ class GACMACAgent(nn.Module):
 
             # log p(a) = log p(tx) + 1[tx] * log p(slot)
             logp = tx_dist.log_prob(tx) + tx * slot_dist.log_prob(slot)
-            entropy = tx_dist.entropy() + tx * slot_dist.entropy()
+            # Entropy regularization must be expectation under the policy, not conditioned on sampled action.
+            # Otherwise the policy can "cheat" by picking No-Tx to avoid slot entropy penalty.
+            p_tx = torch.sigmoid(tx_logit).clamp(1e-6, 1.0 - 1e-6)
+            entropy = tx_dist.entropy() + p_tx * slot_dist.entropy()
 
         values = self._values_from_hidden(h_out, batch=None)
         return action, logp, values, entropy, h_out
@@ -168,7 +171,8 @@ class GACMACAgent(nn.Module):
             slot_dist = Categorical(logits=slot_logits)
 
             action_logp = tx_dist.log_prob(tx) + tx * slot_dist.log_prob(slot)
-            entropy = tx_dist.entropy() + tx * slot_dist.entropy()
+            p_tx = torch.sigmoid(tx_logit).clamp(1e-6, 1.0 - 1e-6)
+            entropy = tx_dist.entropy() + p_tx * slot_dist.entropy()
 
         values = self._values_from_hidden(h_out, batch=None)
         return StepOutputs(action_logp=action_logp, values=values, entropy=entropy, h_out=h_out)
