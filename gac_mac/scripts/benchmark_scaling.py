@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
-from gac_mac.config import Config
+from gac_mac.config import Config, config_from_dict
 from gac_mac.env.channel import ChannelModel
 from gac_mac.env.lawn_env import LAWNEnv
 from gac_mac.env.mobility import GaussMarkovMobility
@@ -136,7 +136,7 @@ def main() -> None:
     cfg_dict = ckpt.get("config", asdict(Config()))
     if "obs_version" not in cfg_dict:
         cfg_dict = {**cfg_dict, "obs_version": "v1", "use_edge_attr": False}
-    base_cfg = Config(**cfg_dict)
+    base_cfg = config_from_dict(cfg_dict)
 
     ns = [int(x.strip()) for x in args.ns.split(",") if x.strip()]
     device = _resolve_device(args.device)

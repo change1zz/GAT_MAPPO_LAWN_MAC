@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from dataclasses import fields as dataclass_fields
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -100,3 +102,14 @@ class Config:
 
     # --- Evaluation ---
     eval_seeds: tuple[int, ...] = field(default_factory=lambda: tuple(123 + i for i in range(10)))
+
+
+def config_from_dict(cfg_dict: dict[str, Any]) -> Config:
+    """Create Config from a (possibly forward/backward-incompatible) dict.
+
+    - Drops unknown keys (newer checkpoints).
+    - Relies on dataclass defaults for missing keys (older checkpoints).
+    """
+    allowed = {f.name for f in dataclass_fields(Config)}
+    filtered = {k: v for k, v in cfg_dict.items() if k in allowed}
+    return Config(**filtered)

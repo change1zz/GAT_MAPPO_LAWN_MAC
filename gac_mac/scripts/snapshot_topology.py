@@ -6,7 +6,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from gac_mac.config import Config
+from gac_mac.config import Config, config_from_dict
 from gac_mac.env.channel import ChannelModel
 from gac_mac.env.lawn_env import LAWNEnv
 from gac_mac.env.mobility import GaussMarkovMobility
@@ -80,7 +80,7 @@ def main() -> None:
     # Backward-compat: older checkpoints (v1) did not include obs/model versioning fields.
     if "obs_version" not in cfg_dict:
         cfg_dict = {**cfg_dict, "obs_version": "v1", "use_edge_attr": False}
-    cfg = Config(**cfg_dict)
+    cfg = config_from_dict(cfg_dict)
 
     import torch
 
