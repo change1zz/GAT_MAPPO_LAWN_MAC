@@ -123,4 +123,13 @@
   - Config highlights: `--graph-mode conflict --obs-version v3 --hidden-dim 128 --gat-heads 4 --lr 1e-4 --agent-id-tiebreak-eps 0.1 --reward-idle-nonempty -0.7 --eval-every 20 --eval-episodes 20`
   - Best checkpoint: `results/opt6_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07_eval20-20260108-201637/checkpoints/checkpoint_best_argmax.pth`
   - `evaluate --policy argmax --episodes 50`: `thr 59.747 Mbps | coll 0.645 | jain 0.109` (beats CSMA `57.453 Mbps` on same eval setting)
+
+## 2026-01-08 (Local Anti-Collision Mask)
+
+- Added an optional policy-side constraint using only local/neighbor observations: avoid slots used by in-neighbors in the previous frame.
+  - Flags: `--neighbor-last-action-mask` (hard mask) / `--neighbor-last-action-penalty <p>` (soft logit penalty)
+- Quick check:
+  - Run: `results/opt7_masklast_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-203340/`
+  - Best checkpoint: `results/opt7_masklast_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-203340/checkpoints/checkpoint_best_argmax.pth`
+  - `evaluate --policy argmax --episodes 50`: `thr 57.523 Mbps | coll 0.802 | jain 0.108` (about CSMA-level but collision ratio increases under this metric)
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
