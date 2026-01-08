@@ -15,6 +15,7 @@ class StepOutputs:
     action_logp: torch.Tensor  # (N,)
     values: torch.Tensor  # (N,)
     entropy: torch.Tensor  # (N,)
+    logits: torch.Tensor  # (N, A)
     h_out: torch.Tensor  # (N, H)
 
 
@@ -27,10 +28,14 @@ class GACMACAgent(nn.Module):
         gat_heads: int = 2,
         *,
         use_edge_attr: bool = True,
+        use_agent_id_tiebreak: bool = False,
+        agent_id_tiebreak_eps: float = 0.0,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.action_dim = int(action_dim)
+        self.use_agent_id_tiebreak = bool(use_agent_id_tiebreak)
+        self.agent_id_tiebreak_eps = float(agent_id_tiebreak_eps)
 
         edge_dim = 1 if use_edge_attr else None
         self.encoder = STGNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, heads=gat_heads, edge_dim=edge_dim)
@@ -58,19 +63,51 @@ class GACMACAgent(nn.Module):
             nn.Linear(64, 1),
         )
 
+    def _apply_agent_id_tiebreak(self, logits: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        if not self.use_agent_id_tiebreak:
+            return logits
+        eps = self.agent_id_tiebreak_eps
+        if eps <= 0.0:
+            return logits
+        # GraphBuilder v3 layout places agent-id at feature index 6:
+        # pos(3) + q(1) + energy(1) + sig_norm(1) + agent_id(1) => agent_id at 6 (0-based).
+        if x.size(-1) <= 6 or logits.size(-1) < 2:
+            return logits
+        agent_id = x[:, 6].to(dtype=logits.dtype)  # normalized ~ [0,1)
+        k = int(logits.size(-1) - 1)  # slots, excluding NoTx
+        if k <= 0:
+            return logits
+        pref = torch.clamp((agent_id * float(k)).to(dtype=torch.long), 0, k - 1)  # (N,)
+        bias = torch.zeros_like(logits)
+        bias[torch.arange(logits.size(0), device=logits.device), pref] = eps
+        return logits + bias
+
+    def forward_logits(
+        self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, h_in: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        h_out = self.encoder(x, edge_index, edge_attr, h_in)
+        logits = self.actor(h_out)
+        logits = self._apply_agent_id_tiebreak(logits, x)
+        return logits, h_out
+
     def initial_hidden(self, num_nodes: int, device: torch.device) -> torch.Tensor:
         return torch.zeros((num_nodes, self.hidden_dim), dtype=torch.float32, device=device)
 
     def act(
-        self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, h_in: torch.Tensor
+        self,
+        x: torch.Tensor,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor | None,
+        h_in: torch.Tensor,
+        *,
+        deterministic: bool = False,
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
         """Sample actions for rollout (no gradients expected)."""
-        h_out = self.encoder(x, edge_index, edge_attr, h_in)
-        logits = self.actor(h_out)
+        logits, h_out = self.forward_logits(x, edge_index, edge_attr, h_in)
         dist = Categorical(logits=logits)
-        action = dist.sample()
+        action = torch.argmax(logits, dim=-1) if deterministic else dist.sample()
         logp = dist.log_prob(action)
         entropy = dist.entropy()
         values = self._values_from_hidden(h_out, batch=None)
@@ -84,13 +121,12 @@ class GACMACAgent(nn.Module):
         h_in: torch.Tensor,
         actions: torch.Tensor,
     ) -> StepOutputs:
-        h_out = self.encoder(x, edge_index, edge_attr, h_in)
-        logits = self.actor(h_out)
+        logits, h_out = self.forward_logits(x, edge_index, edge_attr, h_in)
         dist = Categorical(logits=logits)
         action_logp = dist.log_prob(actions)
         entropy = dist.entropy()
         values = self._values_from_hidden(h_out, batch=None)
-        return StepOutputs(action_logp=action_logp, values=values, entropy=entropy, h_out=h_out)
+        return StepOutputs(action_logp=action_logp, values=values, entropy=entropy, logits=logits, h_out=h_out)
 
     def value_only(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, h_in: torch.Tensor

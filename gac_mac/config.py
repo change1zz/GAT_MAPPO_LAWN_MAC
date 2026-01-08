@@ -68,6 +68,7 @@ class Config:
     # --- Model ---
     hidden_dim: int = 64
     gat_heads: int = 2
+    agent_id_tiebreak_eps: float = 0.0
 
     # --- PPO / MAPPO ---
     lr: float = 3e-4
@@ -79,6 +80,7 @@ class Config:
     value_loss_coef: float = 0.5
     entropy_coef: float = 0.01
     max_grad_norm: float = 0.5
+    conflict_loss_coef: float = 0.0
 
     # --- Runtime / checkpointing ---
     num_envs: int = 1  # parallel rollout environments (vectorized)
@@ -86,3 +88,4 @@ class Config:
     steps_per_update: int = 128  # environment steps collected per update
     log_interval: int = 1
     checkpoint_interval: int = 50
+    pretrain_greedy_steps: int = 0

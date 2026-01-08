@@ -9,6 +9,7 @@ import numpy as np
 
 from gac_mac.algo.buffer import RolloutBuffer
 from gac_mac.algo.mappo import MAPPOTrainer
+from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
 from gac_mac.config import Config
 from gac_mac.env.channel import ChannelModel
 from gac_mac.env.lawn_env import LAWNEnv
@@ -47,12 +48,16 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gat-heads", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
     p.add_argument("--entropy-coef", type=float, default=None)
+    p.add_argument("--conflict-loss-coef", type=float, default=None)
+    p.add_argument("--agent-id-tiebreak-eps", type=float, default=None)
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
     p.add_argument("--lambda-coop", type=float, default=None)
     p.add_argument("--num-envs", type=int, default=None, help="Vectorized rollout envs (>=1).")
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
+    p.add_argument("--pretrain-greedy-steps", type=int, default=None, help="Supervised warm-start steps using Greedy teacher (0=off).")
+    p.add_argument("--rollout-policy", type=str, default="sample", choices=["sample", "argmax"], help="Action selection during rollout collection.")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth")
     p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging.")
     return p.parse_args()
@@ -107,6 +112,10 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "lr": float(args.lr)})
     if args.entropy_coef is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "entropy_coef": float(args.entropy_coef)})
+    if args.conflict_loss_coef is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "conflict_loss_coef": float(args.conflict_loss_coef)})
+    if args.agent_id_tiebreak_eps is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "agent_id_tiebreak_eps": float(args.agent_id_tiebreak_eps)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
     if args.reward_collision is not None:
@@ -117,6 +126,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "lambda_coop": float(args.lambda_coop)})
     if args.num_envs is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "num_envs": int(args.num_envs)})
+    if args.pretrain_greedy_steps is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "pretrain_greedy_steps": int(args.pretrain_greedy_steps)})
 
     seed_everything(cfg.seed)
     device = _resolve_device(cfg.device)
@@ -228,6 +239,8 @@ def main() -> None:
         action_dim=action_dim,
         gat_heads=cfg.gat_heads,
         use_edge_attr=cfg.use_edge_attr,
+        use_agent_id_tiebreak=(cfg.obs_version == "v3" and cfg.agent_id_tiebreak_eps > 0.0),
+        agent_id_tiebreak_eps=cfg.agent_id_tiebreak_eps,
     ).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=cfg.lr)
 
@@ -239,6 +252,7 @@ def main() -> None:
         bptt_len=cfg.bptt_len,
         value_loss_coef=cfg.value_loss_coef,
         entropy_coef=cfg.entropy_coef,
+        conflict_loss_coef=cfg.conflict_loss_coef,
         max_grad_norm=cfg.max_grad_norm,
         device=device,
     )
@@ -281,6 +295,71 @@ def main() -> None:
         edge_attr = torch.cat(eas, dim=0) if eas else torch.zeros((0, 1), dtype=torch.float32, device=device)
         return x, edge_index, edge_attr
 
+    if cfg.pretrain_greedy_steps > 0:
+        if vec_env is not None and args.parallel_env:
+            raise RuntimeError(
+                "--pretrain-greedy-steps is not supported with --parallel-env (teacher needs in-process env state)."
+            )
+
+        greedy = GreedyColoringAgent(cfg.num_slots)
+        import torch.nn.functional as F
+
+        print(f"[pretrain] greedy_steps={cfg.pretrain_greedy_steps}", flush=True)
+        pre_h = agent.initial_hidden(cfg.num_uavs * num_envs, device)
+        pre_losses: list[float] = []
+        for s in range(int(cfg.pretrain_greedy_steps)):
+            if num_envs > 1:
+                x, edge_index, edge_attr = _stack_obs(obs_list)
+                # Teacher per-env actions (needs env internals, so only SyncVectorEnv supported here).
+                act_np = np.stack(
+                    [greedy.select_actions(env=e, obs_x=ob.x) for e, ob in zip(vec_env.envs, obs_list)], axis=0  # type: ignore[union-attr]
+                )
+                teacher_actions = torch.tensor(act_np.reshape(-1), dtype=torch.long, device=device)
+            else:
+                x = torch.tensor(obs.x, dtype=torch.float32, device=device)
+                edge_index = torch.tensor(obs.edge_index, dtype=torch.long, device=device)
+                edge_attr = torch.tensor(obs.edge_attr, dtype=torch.float32, device=device)
+                act_np = greedy.select_actions(env=env, obs_x=obs.x)
+                teacher_actions = torch.tensor(act_np, dtype=torch.long, device=device)
+
+            logits, h_out = agent.forward_logits(x, edge_index, edge_attr, pre_h.detach())
+            q_norm = x[:, 3] if x.numel() > 0 and x.size(-1) > 3 else torch.zeros((logits.size(0),), device=device)
+            active = q_norm > 0.0
+            loss_active = (
+                F.cross_entropy(logits[active], teacher_actions[active]) if bool(active.any().item()) else logits.sum() * 0.0
+            )
+            loss_inactive = (
+                F.cross_entropy(logits[~active], teacher_actions[~active])
+                if bool((~active).any().item())
+                else logits.sum() * 0.0
+            )
+            loss = loss_active + 0.1 * loss_inactive
+
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(agent.parameters(), cfg.max_grad_norm)
+            optimizer.step()
+
+            pre_losses.append(float(loss.item()))
+            pre_h = h_out.detach()
+
+            if num_envs > 1:
+                next_obs_list, _rewards_np, dones_env, _infos = vec_env.step(act_np)  # type: ignore[union-attr]
+                done_mask_np = np.repeat(dones_env.reshape(-1, 1), cfg.num_uavs, axis=1).reshape(-1).astype(np.float32)
+                pre_h = pre_h * (
+                    1.0 - torch.tensor(done_mask_np, dtype=torch.float32, device=device).view(-1, 1)
+                )
+                obs_list = next_obs_list
+            else:
+                next_obs, _rewards_np, done, _info = env.step(act_np)
+                if done:
+                    next_obs = env.reset()
+                    pre_h = agent.initial_hidden(cfg.num_uavs, device)
+                obs = next_obs
+
+            if (s + 1) % 200 == 0:
+                print(f"[pretrain] step {s+1:05d} | ce {float(np.mean(pre_losses[-200:])):.4f}", flush=True)
+
     for update in range(start_update, cfg.total_updates):
         buffer.reset()
 
@@ -305,7 +384,9 @@ def main() -> None:
 
             h_in = h.detach()
             with torch.no_grad():
-                action, logp, values, _entropy, h_out = agent.act(x, edge_index, edge_attr, h_in)
+                action, logp, values, _entropy, h_out = agent.act(
+                    x, edge_index, edge_attr, h_in, deterministic=(args.rollout_policy == "argmax")
+                )
 
             if num_envs > 1:
                 act_np = action.view(num_envs, cfg.num_uavs).cpu().numpy()
@@ -315,7 +396,7 @@ def main() -> None:
                     np.float32
                 )
                 done_mask = torch.tensor(done_mask_np, dtype=torch.float32, device=device)
-                info_rate = float(np.mean([i.get("sum_rate", 0.0) for i in infos]))
+                info_rate = float(np.mean([i.get("sum_rate_mbps", i.get("sum_rate", 0.0)) for i in infos]))
                 info_coll = float(np.mean([i.get("collision_rate", 0.0) for i in infos]))
                 info_delay = float(np.mean([i.get("avg_delay", 0.0) for i in infos]))
                 info_deg = float(np.mean([i.get("avg_degree_in", 0.0) for i in infos]))
@@ -326,7 +407,7 @@ def main() -> None:
                 next_obs, rewards_np, done, info = env.step(action.cpu().numpy())
                 rewards = torch.tensor(rewards_np, dtype=torch.float32, device=device)
                 done_mask = torch.full_like(rewards, 1.0 if done else 0.0)
-                info_rate = float(info.get("sum_rate", 0.0))
+                info_rate = float(info.get("sum_rate_mbps", info.get("sum_rate", 0.0)))
                 info_coll = float(info.get("collision_rate", 0.0))
                 info_delay = float(info.get("avg_delay", 0.0))
                 info_deg = float(info.get("avg_degree_in", 0.0))
@@ -417,6 +498,7 @@ def main() -> None:
             writer.add_scalar("loss/actor", stats.actor_loss, update + 1)
             writer.add_scalar("loss/value", stats.value_loss, update + 1)
             writer.add_scalar("loss/entropy", stats.entropy, update + 1)
+            writer.add_scalar("loss/conflict", stats.conflict_loss, update + 1)
 
         if (update + 1) % cfg.log_interval == 0:
             print(
@@ -424,7 +506,7 @@ def main() -> None:
                 f"R {rolling['reward'][-1]:+.3f} | "
                 f"rate {rolling['sum_rate'][-1]:.2f} | "
                 f"coll {rolling['collision_rate'][-1]:.3f} | "
-                f"loss {stats.loss:.3f} (pi {stats.actor_loss:.3f}, v {stats.value_loss:.3f}, ent {stats.entropy:.3f})",
+                f"loss {stats.loss:.3f} (pi {stats.actor_loss:.3f}, v {stats.value_loss:.3f}, ent {stats.entropy:.3f}, conf {stats.conflict_loss:.3f})",
                 flush=True,
             )
 

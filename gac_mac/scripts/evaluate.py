@@ -169,6 +169,8 @@ def main() -> None:
         action_dim=cfg.num_slots + 1,
         gat_heads=cfg.gat_heads,
         use_edge_attr=cfg.use_edge_attr,
+        use_agent_id_tiebreak=(cfg.obs_version == "v3" and getattr(cfg, "agent_id_tiebreak_eps", 0.0) > 0.0),
+        agent_id_tiebreak_eps=getattr(cfg, "agent_id_tiebreak_eps", 0.0),
     ).to(device)
     agent.load_state_dict(ckpt["agent_state_dict"])
     agent.eval()
@@ -184,8 +186,7 @@ def main() -> None:
             gac_policy.h = agent.initial_hidden(cfg.num_uavs, device)
         h_in = gac_policy.h
         with torch.no_grad():
-            h_out = agent.encoder(x, ei, ea, h_in)
-            logits = agent.actor(h_out)
+            logits, h_out = agent.forward_logits(x, ei, ea, h_in)
             if args.policy == "sample":
                 temp = float(max(1e-6, args.temperature))
                 dist = torch.distributions.Categorical(logits=logits / temp)

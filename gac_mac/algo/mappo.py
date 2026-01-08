@@ -15,6 +15,7 @@ class UpdateStats:
     actor_loss: float
     value_loss: float
     entropy: float
+    conflict_loss: float
 
 
 class MAPPOTrainer:
@@ -28,6 +29,7 @@ class MAPPOTrainer:
         bptt_len: int,
         value_loss_coef: float,
         entropy_coef: float,
+        conflict_loss_coef: float,
         max_grad_norm: float,
         device: torch.device,
     ) -> None:
@@ -38,8 +40,23 @@ class MAPPOTrainer:
         self.bptt_len = int(bptt_len)
         self.value_loss_coef = float(value_loss_coef)
         self.entropy_coef = float(entropy_coef)
+        self.conflict_loss_coef = float(conflict_loss_coef)
         self.max_grad_norm = float(max_grad_norm)
         self.device = device
+
+    def _conflict_loss(self, probs: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        # Encourage neighbors to use different slot preferences.
+        # Use conditional slot distribution softmax(logits_slots) (i.e., exclude NoTx),
+        # so this can't be trivially minimized by pushing probability mass into NoTx.
+        if edge_index.numel() == 0:
+            return torch.zeros((), device=probs.device, dtype=probs.dtype)
+        if probs.size(-1) < 2:
+            return torch.zeros((), device=probs.device, dtype=probs.dtype)
+        slot_probs = probs[:, :-1]  # (N, K), already normalized over slots
+        src = edge_index[0].long()
+        dst = edge_index[1].long()
+        dot = (slot_probs[src] * slot_probs[dst]).sum(dim=-1)  # (E,)
+        return dot.mean()
 
     def update(self, batch: RolloutBatch) -> UpdateStats:
         T = len(batch.rewards)
@@ -54,6 +71,7 @@ class MAPPOTrainer:
         total_actor = 0.0
         total_value = 0.0
         total_entropy = 0.0
+        total_conflict = 0.0
         steps = 0
 
         for _epoch in range(self.ppo_epochs):
@@ -67,6 +85,7 @@ class MAPPOTrainer:
                 new_logps: list[torch.Tensor] = []
                 values: list[torch.Tensor] = []
                 entropies: list[torch.Tensor] = []
+                conflicts: list[torch.Tensor] = []
 
                 for t in range(seg_start, seg_end):
                     x_t = batch.x[t].to(self.device)
@@ -85,10 +104,14 @@ class MAPPOTrainer:
                     new_logps.append(out.action_logp)
                     values.append(out.values)
                     entropies.append(out.entropy)
+                    if self.conflict_loss_coef > 0.0:
+                        slot_probs = torch.softmax(out.logits[:, :-1], dim=-1)
+                        conflicts.append(self._conflict_loss(slot_probs, ei_t))
 
                 new_logp_seg = torch.stack(new_logps, dim=0)  # (L,N)
                 values_seg = torch.stack(values, dim=0)  # (L,N)
                 entropy_seg = torch.stack(entropies, dim=0)  # (L,N)
+                conflict_seg = torch.stack(conflicts, dim=0).mean() if conflicts else torch.zeros((), device=self.device)
 
                 old_logp_seg = old_logp[seg_start:seg_end].to(self.device)
                 adv_seg = advantages[seg_start:seg_end].to(self.device)
@@ -102,7 +125,12 @@ class MAPPOTrainer:
                 value_loss = F.mse_loss(values_seg, ret_seg)
                 entropy = entropy_seg.mean()
 
-                loss = actor_loss + self.value_loss_coef * value_loss - self.entropy_coef * entropy
+                loss = (
+                    actor_loss
+                    + self.value_loss_coef * value_loss
+                    - self.entropy_coef * entropy
+                    + self.conflict_loss_coef * conflict_seg
+                )
 
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -113,6 +141,7 @@ class MAPPOTrainer:
                 total_actor += float(actor_loss.item())
                 total_value += float(value_loss.item())
                 total_entropy += float(entropy.item())
+                total_conflict += float(conflict_seg.item())
                 steps += 1
 
                 seg_start = seg_end
@@ -123,4 +152,5 @@ class MAPPOTrainer:
             actor_loss=total_actor / denom,
             value_loss=total_value / denom,
             entropy=total_entropy / denom,
+            conflict_loss=total_conflict / denom,
         )
