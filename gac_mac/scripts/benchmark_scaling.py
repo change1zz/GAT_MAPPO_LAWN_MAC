@@ -97,6 +97,7 @@ def make_env(cfg: Config) -> LAWNEnv:
         reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
         reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
         reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
+        reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
         lambda_coop=cfg.lambda_coop,
     )
 

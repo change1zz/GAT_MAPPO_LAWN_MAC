@@ -73,6 +73,7 @@ class Config:
     reward_tx_attempt: float = 0.1
     reward_repeat_success: float = 0.2
     reward_repeat_collision: float = -0.2
+    reward_neighbor_slot_conflict: float = -0.1
     lambda_coop: float = 0.5
 
     # --- Model ---

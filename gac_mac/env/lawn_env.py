@@ -66,6 +66,7 @@ class LAWNEnv:
         reward_tx_attempt: float,
         reward_repeat_success: float,
         reward_repeat_collision: float,
+        reward_neighbor_slot_conflict: float,
         lambda_coop: float,
     ) -> None:
         self.N = int(num_uavs)
@@ -94,6 +95,7 @@ class LAWNEnv:
         self.reward_tx_attempt = float(reward_tx_attempt)
         self.reward_repeat_success = float(reward_repeat_success)
         self.reward_repeat_collision = float(reward_repeat_collision)
+        self.reward_neighbor_slot_conflict = float(reward_neighbor_slot_conflict)
         self.lambda_coop = float(lambda_coop)
 
         self._rng = np.random.default_rng()
@@ -241,6 +243,19 @@ class LAWNEnv:
             prev_collision = self.last_status == self.STATUS_COLLISION
             r_perf[repeat_slot & prev_success] += self.reward_repeat_success
             r_perf[repeat_slot & prev_collision] += self.reward_repeat_collision
+
+        # Local anti-synchronization: discourage choosing a slot that many IN-neighbors used last frame.
+        if float(self.reward_neighbor_slot_conflict) != 0.0:
+            in_deg_prev = adj.sum(axis=0).astype(np.float32)  # (N,)
+            last_tx = (self.last_actions < self.K).astype(np.uint8)
+            chosen = actions.copy()
+            for s in range(self.K):
+                mask_last_s = ((self.last_actions == s).astype(np.uint8) & last_tx).astype(np.float32)  # (N,)
+                count_s = adj.T.astype(np.float32) @ mask_last_s  # (N,)
+                sel = (tx_mask & (chosen == s)).astype(np.float32)
+                if np.any(sel > 0):
+                    norm = np.maximum(in_deg_prev, 1.0)
+                    r_perf += self.reward_neighbor_slot_conflict * (count_s / norm) * sel
 
         # Cooperative term over IN-neighbors: N_i = { j | j -> i }
         in_deg = adj.sum(axis=0).astype(np.float32)  # (N,)

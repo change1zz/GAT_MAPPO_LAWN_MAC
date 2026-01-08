@@ -60,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
     p.add_argument("--reward-tx-attempt", type=float, default=None)
+    p.add_argument("--reward-neighbor-slot-conflict", type=float, default=None)
     p.add_argument("--lambda-coop", type=float, default=None)
     p.add_argument("--num-envs", type=int, default=None, help="Vectorized rollout envs (>=1).")
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
@@ -134,6 +135,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_idle_nonempty": float(args.reward_idle_nonempty)})
     if args.reward_tx_attempt is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_tx_attempt": float(args.reward_tx_attempt)})
+    if args.reward_neighbor_slot_conflict is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "reward_neighbor_slot_conflict": float(args.reward_neighbor_slot_conflict)})
     if args.lambda_coop is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "lambda_coop": float(args.lambda_coop)})
     if args.num_envs is not None:
@@ -187,6 +190,7 @@ def main() -> None:
             reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
             reward_repeat_success=cfg.reward_repeat_success,
             reward_repeat_collision=cfg.reward_repeat_collision,
+            reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
             lambda_coop=cfg.lambda_coop,
         )
     else:
@@ -233,6 +237,7 @@ def main() -> None:
             reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
             reward_repeat_success=cfg.reward_repeat_success,
             reward_repeat_collision=cfg.reward_repeat_collision,
+            reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
             lambda_coop=cfg.lambda_coop,
         )
 
