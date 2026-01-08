@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--conflict-loss-coef", type=float, default=None)
     p.add_argument("--agent-id-tiebreak-eps", type=float, default=None)
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
+    p.add_argument("--reward-success", type=float, default=None)
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
     p.add_argument("--lambda-coop", type=float, default=None)
@@ -121,6 +122,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "agent_id_tiebreak_eps": float(args.agent_id_tiebreak_eps)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
+    if args.reward_success is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "reward_success": float(args.reward_success)})
     if args.reward_collision is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_collision": float(args.reward_collision)})
     if args.reward_idle_nonempty is not None:
