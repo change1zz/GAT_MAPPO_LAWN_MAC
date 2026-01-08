@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--run-name", type=str, default=None)
     p.add_argument("--cs-threshold-dbm", type=float, default=None)
     p.add_argument("--graph-mode", type=str, default=None, choices=["cs", "conflict"])
-    p.add_argument("--obs-version", type=str, default=None, choices=["v1", "v2", "v3"])
+    p.add_argument("--obs-version", type=str, default=None, choices=["v1", "v2", "v3", "v4"])
     p.add_argument("--no-edge-attr", action="store_true", help="Disable edge_attr usage in GAT (v1-style).")
     p.add_argument("--total-updates", type=int, default=None)
     p.add_argument("--steps-per-update", type=int, default=None)
