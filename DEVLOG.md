@@ -83,3 +83,12 @@
 - Reference run:
   - `results/B_distill_greedy-20260107-233255/checkpoints/checkpoint_0200.pth`
   - `evaluate --policy sample --temperature 0.7` (10 seeds): `thr 8.435 Mbps | coll 0.416 | jain 0.863`
+
+## 2026-01-08 (exp/distill-greedy: reward aligned to throughput)
+
+- Observation: binary success/collision reward is misaligned with Mbps throughput; sampling temperature heavily impacts Tx activity.
+- Change: switch training to `reward_mode=rate` (success reward uses `log2(1+SINR)`), keep distillation, and add a small static Tx-attempt bonus.
+- Best checkpoint found so far (10 seeds eval, `--policy sample --temperature 0.7`):
+  - `results/B_distill_rate_reward-20260108-125732/checkpoints/checkpoint_0050.pth`
+  - `thr 8.539 Mbps | coll 0.514 | jain 0.860`
+- Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
