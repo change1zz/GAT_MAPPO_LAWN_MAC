@@ -115,4 +115,12 @@
   - Config highlights: `--graph-mode conflict --hidden-dim 128 --gat-heads 4 --lr 1e-4 --agent-id-tiebreak-eps 0.1 --reward-idle-nonempty -0.7`
   - Best checkpoint: `results/opt4_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-200453/checkpoints/checkpoint_best_argmax.pth`
   - `evaluate --policy argmax --episodes 30`: `thr 54.754 Mbps | coll 0.644 | jain 0.103` (close to CSMA baseline in this setting)
+
+## 2026-01-08 (Argmax >= CSMA)
+
+- Add periodic argmax evaluation inside training and select best via `checkpoint_best_argmax.pth` (reduce selection noise with larger `--eval-episodes`).
+- Run: `results/opt6_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07_eval20-20260108-201637/`
+  - Config highlights: `--graph-mode conflict --obs-version v3 --hidden-dim 128 --gat-heads 4 --lr 1e-4 --agent-id-tiebreak-eps 0.1 --reward-idle-nonempty -0.7 --eval-every 20 --eval-episodes 20`
+  - Best checkpoint: `results/opt6_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07_eval20-20260108-201637/checkpoints/checkpoint_best_argmax.pth`
+  - `evaluate --policy argmax --episodes 50`: `thr 59.747 Mbps | coll 0.645 | jain 0.109` (beats CSMA `57.453 Mbps` on same eval setting)
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
