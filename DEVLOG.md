@@ -132,4 +132,13 @@
   - Run: `results/opt7_masklast_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-203340/`
   - Best checkpoint: `results/opt7_masklast_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-203340/checkpoints/checkpoint_best_argmax.pth`
   - `evaluate --policy argmax --episodes 50`: `thr 57.523 Mbps | coll 0.802 | jain 0.108` (about CSMA-level but collision ratio increases under this metric)
+
+## 2026-01-08 (Argmax Sweep: New Best)
+
+- Sweep runner added: `python -m gac_mac.scripts.sweep_argmax` (auto-trains and evaluates candidates).
+- New best (argmax policy, 100 episodes eval):
+  - Run: `results/sweepA_idle070_tie010_lr1e4-20260108-204929/`
+  - Best checkpoint: `results/sweepA_idle070_tie010_lr1e4-20260108-204929/checkpoints/checkpoint_best_argmax.pth`
+  - `evaluate --policy argmax --episodes 100`: `thr 70.825 Mbps | coll 0.385 | jain 0.125`
+  - Baselines on same eval: `CSMA thr 58.041 Mbps`, `Greedy thr 135.713 Mbps`
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
