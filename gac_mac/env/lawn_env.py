@@ -14,6 +14,8 @@ from gac_mac.env.traffic import PoissonTraffic
 @dataclass(frozen=True)
 class StepInfo:
     sum_rate: float
+    sum_rate_mbps: float
+    jain: float
     collision_rate: float
     avg_delay: float
     tx_attempts: int
@@ -79,7 +81,8 @@ class LAWNEnv:
         self.cs_threshold_dbm = float(cs_threshold_dbm)
         self.sinr_threshold_db = float(sinr_threshold_db)
         self.sinr_threshold_lin = float(10.0 ** (self.sinr_threshold_db / 10.0))
-        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * bandwidth_hz)
+        self.bandwidth_hz = float(bandwidth_hz)
+        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * self.bandwidth_hz)
 
         self.reward_mode = str(reward_mode)
         self.reward_success = float(reward_success)
@@ -238,9 +241,17 @@ class LAWNEnv:
         # Metrics
         attempts = int(tx_mask.sum())
         n_coll = int(collision.sum())
-        sum_rate = float(np.log2(1.0 + sinr[success]).sum()) if np.any(success) else 0.0
+        rate_per_node = np.zeros((self.N,), dtype=np.float32)
+        if np.any(success):
+            rate_per_node[success] = np.log2(1.0 + sinr[success]).astype(np.float32)
+        sum_rate = float(rate_per_node.sum())
+        sum_rate_mbps = float((self.bandwidth_hz * rate_per_node).sum() / 1e6)
+        denom = float((rate_per_node**2).sum())
+        jain = float((sum_rate * sum_rate) / (self.N * denom)) if denom > 0.0 else 0.0
         info = StepInfo(
             sum_rate=sum_rate,
+            sum_rate_mbps=sum_rate_mbps,
+            jain=jain,
             collision_rate=float(n_coll / max(1, attempts)),
             avg_delay=float(np.mean(delays)) if delays else 0.0,
             tx_attempts=attempts,

@@ -50,14 +50,15 @@ def plot_eval_summary(results: list[dict[str, float]], save_path: str) -> None:
     import matplotlib.pyplot as plt
 
     names = [r["name"] for r in results]
-    sum_rates = [r["sum_rate"] for r in results]
+    rate_key = "sum_rate_mbps" if results and "sum_rate_mbps" in results[0] else "sum_rate"
+    sum_rates = [r[rate_key] for r in results]
     colls = [r["collision_rate"] for r in results]
 
     plt.figure(figsize=(10, 4))
 
     plt.subplot(1, 2, 1)
     plt.bar(names, sum_rates, color="steelblue")
-    plt.title("Mean Sum-Rate")
+    plt.title("Mean Throughput (Mbps)" if rate_key == "sum_rate_mbps" else "Mean Sum-Rate")
     plt.grid(True, axis="y", alpha=0.3)
 
     plt.subplot(1, 2, 2)
@@ -86,11 +87,14 @@ def plot_scaling_lines(
     ax3 = fig.add_subplot(1, 3, 3)
 
     for name, metrics in results_by_algo.items():
-        ax1.plot(ns, metrics.get("sum_rate", []), marker="o", label=name)
+        ys = metrics.get("sum_rate_mbps", None)
+        if ys is None:
+            ys = metrics.get("sum_rate", [])
+        ax1.plot(ns, ys, marker="o", label=name)
         ax2.plot(ns, metrics.get("avg_delay", []), marker="o", label=name)
         ax3.plot(ns, metrics.get("collision_rate", []), marker="o", label=name)
 
-    ax1.set_title("Throughput (sum_rate/frame)")
+    ax1.set_title("Throughput (Mbps/frame)" if any("sum_rate_mbps" in m for m in results_by_algo.values()) else "Throughput (sum_rate/frame)")
     ax1.set_xlabel("N (UAVs)")
     ax1.grid(True, alpha=0.3)
 

@@ -104,6 +104,7 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
     rng = np.random.default_rng(base_seed)
 
     ep_rates = []
+    ep_jains = []
     ep_colls = []
     ep_delays = []
 
@@ -114,25 +115,29 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
             policy_fn.reset()  # type: ignore[attr-defined]
 
         rate_sum = 0.0
+        jain_sum = 0.0
         coll_sum = 0.0
         delay_sum = 0.0
 
         for _t in range(cfg.episode_len):
             actions = policy_fn(env, obs, rng)
             obs, _rew, done, info = env.step(actions)
-            rate_sum += float(info["sum_rate"])
+            rate_sum += float(info.get("sum_rate_mbps", info["sum_rate"]))
+            jain_sum += float(info.get("jain", 0.0))
             coll_sum += float(info["collision_rate"])
             delay_sum += float(info["avg_delay"])
             if done:
                 break
 
         ep_rates.append(rate_sum / cfg.episode_len)
+        ep_jains.append(jain_sum / cfg.episode_len)
         ep_colls.append(coll_sum / cfg.episode_len)
         ep_delays.append(delay_sum / cfg.episode_len)
 
     return {
         "name": name,
-        "sum_rate": float(np.mean(ep_rates)),
+        "sum_rate_mbps": float(np.mean(ep_rates)),
+        "jain": float(np.mean(ep_jains)),
         "collision_rate": float(np.mean(ep_colls)),
         "avg_delay": float(np.mean(ep_delays)),
     }
@@ -229,7 +234,7 @@ def main() -> None:
     print("=== Evaluation (mean over episodes) ===")
     for r in results:
         print(
-            f"{r['name']:7s} | sum_rate {r['sum_rate']:.3f} | coll {r['collision_rate']:.3f} | delay {r['avg_delay']:.3f}"
+            f"{r['name']:7s} | thr {r['sum_rate_mbps']:.3f} Mbps | jain {r['jain']:.3f} | coll {r['collision_rate']:.3f} | delay {r['avg_delay']:.3f}"
         )
 
     if args.out:
