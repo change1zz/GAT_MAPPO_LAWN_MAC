@@ -125,6 +125,17 @@ class LAWNEnv:
         # Per-frame sampled channel (large-scale + fading) for THIS state.
         self._ch: ChannelSample | None = None
 
+        # Optional teacher (for training-time distillation only).
+        self.enable_greedy_teacher: bool = False
+        self._greedy_teacher = None
+
+    def _get_greedy_teacher(self):
+        from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
+
+        if self._greedy_teacher is None:
+            self._greedy_teacher = GreedyColoringAgent(self.K)
+        return self._greedy_teacher
+
     def reset(self, *, seed: int | None = None) -> GraphObs:
         if seed is not None:
             self._rng = np.random.default_rng(seed)
@@ -166,6 +177,11 @@ class LAWNEnv:
             rx_power_dbm=rx_power_dbm_link,
         )
         adj = obs.adj  # uint8 (N,N)
+
+        teacher_actions = None
+        if self.enable_greedy_teacher:
+            # Teacher is centralized and may use env internal PHY snapshot (CTDE).
+            teacher_actions = self._get_greedy_teacher().select_actions(env=self, obs_x=obs.x).astype(np.int64)
 
         # --- Transmission attempt mask ---
         has_pkt = self.traffic.queues > 0
@@ -275,6 +291,7 @@ class LAWNEnv:
         return self._get_obs(), rewards, done, {
             "t": self._t,
             **info.__dict__,
+            **({"teacher_actions": teacher_actions} if teacher_actions is not None else {}),
             # Per-node episode accounting (for evaluation only; policy doesn't need this).
             "per_node_spectral_eff": per_node_se,
             "per_node_throughput_mbps": per_node_thr_mbps,

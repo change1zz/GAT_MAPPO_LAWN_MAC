@@ -225,10 +225,6 @@ def main() -> None:
     num_envs = int(max(1, cfg.num_envs))
     if getattr(cfg, "distill_coef", 0.0) > 0.0 and args.env != "lawn":
         raise ValueError("--distill-coef currently supports only --env lawn (greedy teacher uses PHY state).")
-    if getattr(cfg, "distill_coef", 0.0) > 0.0 and num_envs > 1 and args.parallel_env:
-        # For teacher labels we need access to each env instance, so force SyncVectorEnv.
-        print("[distill] disabling --parallel-env (teacher requires in-process env access)", flush=True)
-        args.parallel_env = False
 
     vec_env = None
     if num_envs > 1:
@@ -248,11 +244,9 @@ def main() -> None:
 
     import torch
 
-    greedy_teacher = None
-    if getattr(cfg, "distill_coef", 0.0) > 0.0:
-        from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
-
-        greedy_teacher = GreedyColoringAgent(cfg.num_slots)
+    if getattr(cfg, "distill_coef", 0.0) > 0.0 and num_envs == 1 and args.env == "lawn":
+        # Single env case: enable teacher labels in env.step() info.
+        env.enable_greedy_teacher = True  # type: ignore[attr-defined]
 
     agent = GACMACAgent(
         input_dim=input_dim,
@@ -348,22 +342,6 @@ def main() -> None:
                 edge_attr = torch.tensor(obs.edge_attr, dtype=torch.float32, device=device)
 
             teacher_actions = None
-            if greedy_teacher is not None:
-                if num_envs > 1:
-                    # SyncVectorEnv exposes env instances for centralized teacher labels.
-                    envs = getattr(vec_env, "envs", None)
-                    if envs is None:
-                        raise RuntimeError("distillation requires SyncVectorEnv (do not use --parallel-env).")
-                    ta = []
-                    for e, ob in zip(envs, obs_list):
-                        ta.append(greedy_teacher.select_actions(env=e, obs_x=ob.x))
-                    teacher_actions = torch.tensor(np.stack(ta, axis=0).reshape(-1), dtype=torch.long, device=device)
-                else:
-                    teacher_actions = torch.tensor(
-                        greedy_teacher.select_actions(env=env, obs_x=obs.x).reshape(-1),
-                        dtype=torch.long,
-                        device=device,
-                    )
 
             h_in = h.detach()
             with torch.no_grad():
@@ -391,6 +369,11 @@ def main() -> None:
                 info_attempts = float(np.mean([i.get("tx_attempts", 0.0) for i in infos]))
                 info_success = float(np.mean([i.get("tx_success", 0.0) for i in infos]))
                 info_collisions = float(np.mean([i.get("tx_collision", 0.0) for i in infos]))
+                if getattr(cfg, "distill_coef", 0.0) > 0.0:
+                    ta_list = [i.get("teacher_actions", None) for i in infos]
+                    if any(t is None for t in ta_list):
+                        raise RuntimeError("distill enabled but teacher_actions missing from vector env info.")
+                    teacher_actions = torch.tensor(np.stack(ta_list, axis=0).reshape(-1), dtype=torch.long, device=device)
             else:
                 next_obs, rewards_np, done, info = env.step(action.cpu().numpy())
                 rewards = torch.tensor(rewards_np, dtype=torch.float32, device=device)
@@ -403,6 +386,11 @@ def main() -> None:
                 info_attempts = float(info.get("tx_attempts", 0.0))
                 info_success = float(info.get("tx_success", 0.0))
                 info_collisions = float(info.get("tx_collision", 0.0))
+                if getattr(cfg, "distill_coef", 0.0) > 0.0:
+                    ta = info.get("teacher_actions", None)
+                    if ta is None:
+                        raise RuntimeError("distill enabled but teacher_actions missing from env info.")
+                    teacher_actions = torch.tensor(np.asarray(ta, dtype=np.int64).reshape(-1), dtype=torch.long, device=device)
 
             with torch.no_grad():
                 has_pkt = x[:, 3] > 0.0
