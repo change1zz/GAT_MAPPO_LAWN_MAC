@@ -101,12 +101,14 @@ class GACMACAgent(nn.Module):
         h_in: torch.Tensor,
         *,
         deterministic: bool = False,
+        temperature: float = 1.0,
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
         """Sample actions for rollout (no gradients expected)."""
         logits, h_out = self.forward_logits(x, edge_index, edge_attr, h_in)
-        dist = Categorical(logits=logits)
+        temp = float(max(1e-6, temperature))
+        dist = Categorical(logits=logits / temp)
         action = torch.argmax(logits, dim=-1) if deterministic else dist.sample()
         logp = dist.log_prob(action)
         entropy = dist.entropy()

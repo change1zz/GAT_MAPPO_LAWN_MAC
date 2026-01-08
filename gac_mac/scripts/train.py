@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
     p.add_argument("--pretrain-greedy-steps", type=int, default=None, help="Supervised warm-start steps using Greedy teacher (0=off).")
     p.add_argument("--rollout-policy", type=str, default="sample", choices=["sample", "argmax"], help="Action selection during rollout collection.")
+    p.add_argument("--rollout-temperature", type=float, default=1.0, help="Sampling temperature for rollout-policy=sample (smaller => more deterministic).")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth")
     p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging.")
     return p.parse_args()
@@ -385,7 +386,12 @@ def main() -> None:
             h_in = h.detach()
             with torch.no_grad():
                 action, logp, values, _entropy, h_out = agent.act(
-                    x, edge_index, edge_attr, h_in, deterministic=(args.rollout_policy == "argmax")
+                    x,
+                    edge_index,
+                    edge_attr,
+                    h_in,
+                    deterministic=(args.rollout_policy == "argmax"),
+                    temperature=float(args.rollout_temperature),
                 )
 
             if num_envs > 1:
