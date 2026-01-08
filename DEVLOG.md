@@ -105,4 +105,5 @@
   - Optional conflict regularizer: `--conflict-loss-coef`
   - Optional agent-id tie-break (v3 only): `--agent-id-tiebreak-eps`
   - Optional argmax rollout collection: `--rollout-policy argmax`
+  - Periodic argmax eval + best checkpoint: `--eval-every/--eval-episodes` saves `checkpoints/checkpoint_best_argmax.pth`
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
