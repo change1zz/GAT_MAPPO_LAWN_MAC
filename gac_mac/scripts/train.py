@@ -62,6 +62,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--pretrain-no-tx-weight", type=float, default=0.2, help="Down-weight NoTx class in greedy pretrain CE (smaller => less collapse).")
     p.add_argument("--rollout-policy", type=str, default="sample", choices=["sample", "argmax"], help="Action selection during rollout collection.")
     p.add_argument("--rollout-temperature", type=float, default=1.0, help="Sampling temperature for rollout-policy=sample (smaller => more deterministic).")
+    p.add_argument("--eval-every", type=int, default=0, help="If >0, run periodic argmax evaluation every N updates.")
+    p.add_argument("--eval-episodes", type=int, default=5, help="Episodes per periodic argmax evaluation.")
+    p.add_argument("--eval-seed", type=int, default=123, help="Base seed for periodic evaluation.")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth")
     p.add_argument("--no-tensorboard", action="store_true", help="Disable TensorBoard logging.")
     return p.parse_args()
@@ -137,6 +140,104 @@ def main() -> None:
 
     seed_everything(cfg.seed)
     device = _resolve_device(cfg.device)
+
+    def _make_single_env() -> ToyLawnEnv | LAWNEnv:
+        if args.env == "toy":
+            return ToyLawnEnv(
+                num_uavs=cfg.num_uavs,
+                num_slots=cfg.num_slots,
+                map_size_m=cfg.map_size_m,
+                height_m=cfg.height_m,
+                neighbor_radius_m=cfg.neighbor_radius_m,
+                max_queue_len=cfg.max_queue_len,
+                lambda_arrival_per_slot=cfg.lambda_arrival_per_slot,
+                episode_len=cfg.episode_len,
+                reward_success=cfg.reward_success,
+                reward_collision=cfg.reward_collision,
+                reward_idle_empty=cfg.reward_idle_empty,
+                reward_idle_nonempty=cfg.reward_idle_nonempty,
+                lambda_coop=cfg.lambda_coop,
+            )
+
+        channel = ChannelModel(
+            fc_ghz=cfg.fc_ghz,
+            los_d1_m=cfg.los_d1_m,
+            los_p1_m=cfg.los_p1_m,
+            shadow_sigma_los_db=cfg.shadow_sigma_los_db,
+            shadow_sigma_nlos_db=cfg.shadow_sigma_nlos_db,
+            nakagami_m_los=cfg.nakagami_m_los,
+            nakagami_m_nlos=cfg.nakagami_m_nlos,
+            min_distance_m=cfg.min_distance_m,
+        )
+        mobility = GaussMarkovMobility(
+            num_nodes=cfg.num_uavs,
+            bounds_xyz_m=(cfg.map_size_m, cfg.map_size_m, cfg.height_m),
+            alpha=cfg.mobility_alpha,
+            sigma_v=cfg.mobility_sigma_v,
+            v_max_mps=cfg.mobility_v_max_mps,
+            dt_s=cfg.mobility_dt_s,
+        )
+        return LAWNEnv(
+            num_uavs=cfg.num_uavs,
+            num_slots=cfg.num_slots,
+            map_size_m=cfg.map_size_m,
+            height_m=cfg.height_m,
+            max_queue_len=cfg.max_queue_len,
+            lambda_arrival_per_slot=cfg.lambda_arrival_per_slot,
+            episode_len=cfg.episode_len,
+            obs_version=cfg.obs_version,
+            graph_mode=cfg.graph_mode,
+            p_tx_dbm=cfg.p_tx_dbm,
+            cs_threshold_dbm=cfg.cs_threshold_dbm,
+            sinr_threshold_db=cfg.sinr_threshold_db,
+            noise_psd_dbm_per_hz=cfg.noise_psd_dbm_per_hz,
+            bandwidth_hz=cfg.bandwidth_hz,
+            channel=channel,
+            mobility=mobility,
+            reward_mode=cfg.reward_mode,
+            reward_success=cfg.reward_success,
+            reward_collision=cfg.reward_collision,
+            reward_idle_empty=cfg.reward_idle_empty,
+            reward_idle_nonempty=cfg.reward_idle_nonempty,
+            lambda_coop=cfg.lambda_coop,
+        )
+
+    def _eval_argmax(agent: GACMACAgent, *, episodes: int, base_seed: int) -> dict[str, float]:
+        import torch
+
+        env_eval = _make_single_env()
+        ep_thr = []
+        ep_coll = []
+        ep_jain = []
+        for ep in range(int(episodes)):
+            obs_eval = env_eval.reset(seed=int(base_seed + ep))
+            h_eval = agent.initial_hidden(cfg.num_uavs, device)
+            thr_sum = 0.0
+            coll_sum = 0.0
+            jain_sum = 0.0
+            for _t in range(cfg.episode_len):
+                x = torch.tensor(obs_eval.x, dtype=torch.float32, device=device)
+                ei = torch.tensor(obs_eval.edge_index, dtype=torch.long, device=device)
+                ea = torch.tensor(obs_eval.edge_attr, dtype=torch.float32, device=device)
+                with torch.no_grad():
+                    logits, h_out = agent.forward_logits(x, ei, ea, h_eval)
+                    act = torch.argmax(logits, dim=-1)
+                obs_eval, _rew, done, info = env_eval.step(act.cpu().numpy())
+                thr_sum += float(info.get("sum_rate_mbps", info.get("sum_rate", 0.0)))
+                coll_sum += float(info.get("collision_rate", 0.0))
+                jain_sum += float(info.get("jain", 0.0))
+                h_eval = h_out.detach()
+                if done:
+                    break
+            denom = float(cfg.episode_len)
+            ep_thr.append(thr_sum / denom)
+            ep_coll.append(coll_sum / denom)
+            ep_jain.append(jain_sum / denom)
+        return {
+            "thr_mbps": float(np.mean(ep_thr)) if ep_thr else 0.0,
+            "coll": float(np.mean(ep_coll)) if ep_coll else 0.0,
+            "jain": float(np.mean(ep_jain)) if ep_jain else 0.0,
+        }
 
     if resume_path:
         run_dir = os.path.dirname(os.path.dirname(resume_path))
@@ -548,6 +649,45 @@ def main() -> None:
                 f"loss {stats.loss:.3f} (pi {stats.actor_loss:.3f}, v {stats.value_loss:.3f}, ent {stats.entropy:.3f}, conf {stats.conflict_loss:.3f})",
                 flush=True,
             )
+
+        if args.eval_every and (update + 1) % int(args.eval_every) == 0:
+            agent.eval()
+            metrics = _eval_argmax(agent, episodes=int(args.eval_episodes), base_seed=int(args.eval_seed))
+            if writer is not None:
+                writer.add_scalar("eval_argmax/thr_mbps", metrics["thr_mbps"], update + 1)
+                writer.add_scalar("eval_argmax/coll", metrics["coll"], update + 1)
+                writer.add_scalar("eval_argmax/jain", metrics["jain"], update + 1)
+            print(
+                f"[eval_argmax] upd {update+1:04d} | thr {metrics['thr_mbps']:.3f} Mbps | "
+                f"jain {metrics['jain']:.3f} | coll {metrics['coll']:.3f}",
+                flush=True,
+            )
+
+            best_path = os.path.join(ckpt_dir, "checkpoint_best_argmax.pth")
+            best_thr = float("-inf")
+            if os.path.exists(best_path):
+                try:
+                    best_ckpt = load_checkpoint(best_path)
+                    best_thr = float(best_ckpt.get("best_argmax_thr_mbps", float("-inf")))
+                except Exception:
+                    best_thr = float("-inf")
+            if metrics["thr_mbps"] > best_thr:
+                save_checkpoint(
+                    best_path,
+                    {
+                        "config": asdict(cfg),
+                        "update": update,
+                        "global_step": global_step,
+                        "best_argmax_thr_mbps": metrics["thr_mbps"],
+                        "best_argmax_jain": metrics["jain"],
+                        "best_argmax_coll": metrics["coll"],
+                        "agent_state_dict": agent.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "rolling": rolling,
+                    },
+                )
+                print(f"[eval_argmax] new best saved: {best_path}", flush=True)
+            agent.train()
 
         if (update + 1) % cfg.checkpoint_interval == 0 or (update + 1) == cfg.total_updates:
             ckpt_path = os.path.join(ckpt_dir, f"checkpoint_{update+1:04d}.pth")
