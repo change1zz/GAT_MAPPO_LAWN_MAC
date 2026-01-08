@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from dataclasses import fields as dataclass_fields
-from typing import Any
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -16,11 +14,6 @@ class Config:
     # Observation / model versioning (for checkpoint compatibility)
     obs_version: str = "v3"  # "v1" (legacy) | "v2" (+link-signal) | "v3" (+link-signal +agent-id)
     use_edge_attr: bool = True  # whether GAT uses edge_attr
-
-    # Actor/Critic behavior
-    action_mask_empty_queue: bool = True  # enforce No-Tx when queue is empty
-    critic_mode: str = "global"  # "node" | "global_mean" | "global"
-    policy_mode: str = "hierarchical"  # "flat" (K+1 softmax) | "hierarchical" (Tx decision + slot choice)
 
     # --- Environment (toy in M1; real in later milestones) ---
     num_uavs: int = 30
@@ -67,13 +60,9 @@ class Config:
     # Reward shaping
     reward_mode: str = "binary"  # "binary" | "rate" (use log2(1+SINR) on success)
     reward_success: float = 1.0
-    reward_collision: float = -1.0
+    reward_collision: float = -2.0
     reward_idle_empty: float = 0.1
-    reward_idle_nonempty: float = -1.0
-    reward_tx_attempt: float = 0.1
-    reward_repeat_success: float = 0.2
-    reward_repeat_collision: float = -0.2
-    reward_neighbor_slot_conflict: float = -0.1
+    reward_idle_nonempty: float = -0.5
     lambda_coop: float = 0.5
 
     # --- Model ---
@@ -85,34 +74,15 @@ class Config:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
-    ppo_epochs: int = 2
+    ppo_epochs: int = 4
     bptt_len: int = 32  # truncated BPTT segment length
     value_loss_coef: float = 0.5
-    entropy_coef: float = 0.03
-    target_kl: float | None = 0.02
+    entropy_coef: float = 0.01
     max_grad_norm: float = 0.5
-
-    # --- Imitation / Distillation (optional) ---
-    distill_coef: float = 0.0
-    distill_mode: str = "slot_only"  # "slot_only" | "tx_slot"
 
     # --- Runtime / checkpointing ---
     num_envs: int = 1  # parallel rollout environments (vectorized)
-    total_updates: int = 2000
-    steps_per_update: int = 256  # environment steps collected per update
+    total_updates: int = 200
+    steps_per_update: int = 128  # environment steps collected per update
     log_interval: int = 1
-    checkpoint_interval: int = 100
-
-    # --- Evaluation ---
-    eval_seeds: tuple[int, ...] = field(default_factory=lambda: tuple(123 + i for i in range(10)))
-
-
-def config_from_dict(cfg_dict: dict[str, Any]) -> Config:
-    """Create Config from a (possibly forward/backward-incompatible) dict.
-
-    - Drops unknown keys (newer checkpoints).
-    - Relies on dataclass defaults for missing keys (older checkpoints).
-    """
-    allowed = {f.name for f in dataclass_fields(Config)}
-    filtered = {k: v for k, v in cfg_dict.items() if k in allowed}
-    return Config(**filtered)
+    checkpoint_interval: int = 50

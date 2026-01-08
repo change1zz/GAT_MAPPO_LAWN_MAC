@@ -73,20 +73,3 @@ class PoissonTraffic:
             self.queues[i] -= 1
         return delays
 
-    def serve_successes_with_per_node_delay(self, *, success_mask: np.ndarray, t: int) -> tuple[list[int], np.ndarray]:
-        """Like serve_successes(), but also returns per-node served delay (NaN if not served)."""
-        delays: list[int] = []
-        per_node = np.full((self.N,), np.nan, dtype=np.float32)
-        idxs = np.where(success_mask)[0]
-        for i in idxs:
-            if self.queues[i] <= 0:
-                continue
-            if not self._arrival_times[i]:
-                self.queues[i] -= 1
-                continue
-            arrival_t = self._arrival_times[i].popleft()
-            d = int(t - arrival_t)
-            delays.append(d)
-            per_node[i] = float(d)
-            self.queues[i] -= 1
-        return delays, per_node

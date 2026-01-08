@@ -111,22 +111,5 @@ class GraphBuilder:
         in_deg = adj.sum(axis=0, keepdims=False).astype(np.float32).reshape(self.N, 1)
         in_deg_norm = in_deg / float(self.N)
 
-        if self.obs_version == "v4":
-            # Local summary: for each node i, counts of IN-neighbors' last chosen slots.
-            # This does not add new information beyond neighbor features, but makes learning easier.
-            last_actions_i64 = np.asarray(last_actions, dtype=np.int64).reshape(self.N)
-            neigh_slot = np.zeros((self.N, self.K), dtype=np.float32)
-            for s in range(self.K):
-                mask_s = (last_actions_i64 == s).astype(np.float32).reshape(self.N, 1)  # (N,1)
-                # Count IN-neighbors j->i that used slot s: sum_j adj[j,i]*1[last_a_j==s]
-                neigh_slot[:, s] = (adj.T.astype(np.float32) @ mask_s).reshape(-1)
-            denom = np.maximum(in_deg.reshape(-1), 1.0).astype(np.float32)
-            neigh_slot = (neigh_slot / denom.reshape(-1, 1)).astype(np.float32)  # normalized by in-degree
-            x = np.concatenate(
-                [pos, q, energy, *extra, last_act_oh, last_status_oh, in_deg_norm, neigh_slot], axis=1
-            ).astype(np.float32)
-        else:
-            x = np.concatenate([pos, q, energy, *extra, last_act_oh, last_status_oh, in_deg_norm], axis=1).astype(
-                np.float32
-            )
+        x = np.concatenate([pos, q, energy, *extra, last_act_oh, last_status_oh, in_deg_norm], axis=1).astype(np.float32)
         return GraphObs(x=x, edge_index=edge_index, edge_attr=edge_attr, adj=adj)

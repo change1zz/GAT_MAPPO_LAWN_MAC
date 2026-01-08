@@ -28,10 +28,6 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
-            reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
-            reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
-            reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
-            reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
             lambda_coop=cfg.lambda_coop,
         )
 
@@ -53,7 +49,7 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
         v_max_mps=cfg.mobility_v_max_mps,
         dt_s=cfg.mobility_dt_s,
     )
-    e = LAWNEnv(
+    return LAWNEnv(
         num_uavs=cfg.num_uavs,
         num_slots=cfg.num_slots,
         map_size_m=cfg.map_size_m,
@@ -75,15 +71,8 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
         reward_collision=cfg.reward_collision,
         reward_idle_empty=cfg.reward_idle_empty,
         reward_idle_nonempty=cfg.reward_idle_nonempty,
-        reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
-        reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
-        reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
-        reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
         lambda_coop=cfg.lambda_coop,
     )
-    if getattr(cfg, "distill_coef", 0.0) > 0.0:
-        e.enable_greedy_teacher = True
-    return e
 
 
 class SyncVectorEnv:

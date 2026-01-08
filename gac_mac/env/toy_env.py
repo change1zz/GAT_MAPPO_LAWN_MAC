@@ -41,10 +41,6 @@ class ToyLawnEnv:
         reward_collision: float,
         reward_idle_empty: float,
         reward_idle_nonempty: float,
-        reward_tx_attempt: float,
-        reward_repeat_success: float,
-        reward_repeat_collision: float,
-        reward_neighbor_slot_conflict: float,
         lambda_coop: float,
     ) -> None:
         self.N = int(num_uavs)
@@ -60,10 +56,6 @@ class ToyLawnEnv:
         self.reward_collision = float(reward_collision)
         self.reward_idle_empty = float(reward_idle_empty)
         self.reward_idle_nonempty = float(reward_idle_nonempty)
-        self.reward_tx_attempt = float(reward_tx_attempt)
-        self.reward_repeat_success = float(reward_repeat_success)
-        self.reward_repeat_collision = float(reward_repeat_collision)
-        self.reward_neighbor_slot_conflict = float(reward_neighbor_slot_conflict)
         self.lambda_coop = float(lambda_coop)
 
         self._rng = np.random.default_rng()
@@ -154,8 +146,9 @@ class ToyLawnEnv:
                 per_step_delays.append(self._packet_ages[i].pop(0))
             self.queues[i] -= 1
 
-        # --- Reward: local performance + neighbor-average cooperative term ---
+        # --- Reward decomposition ---
         r_perf = np.zeros((self.N,), dtype=np.float32)
+        r_pen = np.zeros((self.N,), dtype=np.float32)
 
         r_perf[success] = self.reward_success
 
@@ -164,31 +157,8 @@ class ToyLawnEnv:
         idle_nonempty = idle & has_pkt
 
         r_perf[idle_empty] = self.reward_idle_empty
-        r_perf[collision] = self.reward_collision
-        r_perf[idle_nonempty] = self.reward_idle_nonempty
-
-        if float(self.reward_tx_attempt) != 0.0:
-            r_perf[tx_mask] += self.reward_tx_attempt
-
-        if float(self.reward_repeat_success) != 0.0 or float(self.reward_repeat_collision) != 0.0:
-            prev_tx = self.last_actions < self.K
-            repeat_slot = tx_mask & prev_tx & (actions == self.last_actions)
-            prev_success = self.last_status == self.STATUS_SUCCESS
-            prev_collision = self.last_status == self.STATUS_COLLISION
-            r_perf[repeat_slot & prev_success] += self.reward_repeat_success
-            r_perf[repeat_slot & prev_collision] += self.reward_repeat_collision
-
-        if float(self.reward_neighbor_slot_conflict) != 0.0:
-            in_deg_prev = adj.sum(axis=0).astype(np.float32)
-            last_tx = (self.last_actions < self.K).astype(np.uint8)
-            chosen = actions.copy()
-            for s in range(self.K):
-                mask_last_s = ((self.last_actions == s).astype(np.uint8) & last_tx).astype(np.float32)
-                count_s = adj.T.astype(np.float32) @ mask_last_s
-                sel = (tx_mask & (chosen == s)).astype(np.float32)
-                if np.any(sel > 0):
-                    norm = np.maximum(in_deg_prev, 1.0)
-                    r_perf += self.reward_neighbor_slot_conflict * (count_s / norm) * sel
+        r_pen[collision] = self.reward_collision
+        r_pen[idle_nonempty] = self.reward_idle_nonempty
 
         # Cooperative term over IN-neighbors: N_i = { j | j -> i }
         in_deg = adj.sum(axis=0).astype(np.float32)
@@ -197,7 +167,7 @@ class ToyLawnEnv:
         nonzero = in_deg > 0
         r_coop[nonzero] = self.lambda_coop * (coop_raw[nonzero] / in_deg[nonzero])
 
-        rewards = r_perf + r_coop
+        rewards = r_perf + r_pen + r_coop
 
         # Update last-action/status: only record actual transmission attempt (or No-Tx).
         effective_actions = actions.copy()

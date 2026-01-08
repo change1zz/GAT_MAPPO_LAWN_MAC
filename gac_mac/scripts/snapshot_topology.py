@@ -6,7 +6,7 @@ from dataclasses import asdict
 
 import numpy as np
 
-from gac_mac.config import Config, config_from_dict
+from gac_mac.config import Config
 from gac_mac.env.channel import ChannelModel
 from gac_mac.env.lawn_env import LAWNEnv
 from gac_mac.env.mobility import GaussMarkovMobility
@@ -20,9 +20,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--step", type=int, default=0, help="Frame index to snapshot (0-based)")
-    p.add_argument("--policy", type=str, default="sample", choices=["sample", "argmax", "grouped", "tx_threshold"])
+    p.add_argument("--policy", type=str, default="sample", choices=["sample", "argmax", "grouped"])
     p.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature for --policy sample.")
-    p.add_argument("--tx-threshold", type=float, default=0.3, help="Transmit if P(Tx)>threshold for tx_threshold.")
     p.add_argument("--out", type=str, default="topology_snapshot.png")
     return p.parse_args()
 
@@ -68,10 +67,6 @@ def make_env(cfg: Config) -> LAWNEnv:
         reward_collision=cfg.reward_collision,
         reward_idle_empty=cfg.reward_idle_empty,
         reward_idle_nonempty=cfg.reward_idle_nonempty,
-        reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
-        reward_repeat_success=getattr(cfg, "reward_repeat_success", 0.0),
-        reward_repeat_collision=getattr(cfg, "reward_repeat_collision", 0.0),
-        reward_neighbor_slot_conflict=getattr(cfg, "reward_neighbor_slot_conflict", 0.0),
         lambda_coop=cfg.lambda_coop,
     )
 
@@ -83,7 +78,7 @@ def main() -> None:
     # Backward-compat: older checkpoints (v1) did not include obs/model versioning fields.
     if "obs_version" not in cfg_dict:
         cfg_dict = {**cfg_dict, "obs_version": "v1", "use_edge_attr": False}
-    cfg = config_from_dict(cfg_dict)
+    cfg = Config(**cfg_dict)
 
     import torch
 
@@ -130,11 +125,7 @@ def main() -> None:
                     p_no = probs[:, cfg.num_slots]
                     p_tx = probs[:, : cfg.num_slots].sum(dim=-1)
                     best_slot = torch.argmax(probs[:, : cfg.num_slots], dim=-1)
-                    if args.policy == "tx_threshold":
-                        tau = float(args.tx_threshold)
-                        act = torch.where(p_tx > tau, best_slot, torch.full_like(best_slot, cfg.num_slots))
-                    else:
-                        act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                    act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
                     actions = act.cpu().numpy()
 
         if t == args.step:

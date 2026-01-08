@@ -14,7 +14,6 @@ from gac_mac.env.traffic import PoissonTraffic
 @dataclass(frozen=True)
 class StepInfo:
     sum_rate: float
-    throughput_mbps: float
     collision_rate: float
     avg_delay: float
     tx_attempts: int
@@ -63,10 +62,6 @@ class LAWNEnv:
         reward_collision: float,
         reward_idle_empty: float,
         reward_idle_nonempty: float,
-        reward_tx_attempt: float,
-        reward_repeat_success: float,
-        reward_repeat_collision: float,
-        reward_neighbor_slot_conflict: float,
         lambda_coop: float,
     ) -> None:
         self.N = int(num_uavs)
@@ -84,18 +79,13 @@ class LAWNEnv:
         self.cs_threshold_dbm = float(cs_threshold_dbm)
         self.sinr_threshold_db = float(sinr_threshold_db)
         self.sinr_threshold_lin = float(10.0 ** (self.sinr_threshold_db / 10.0))
-        self.bandwidth_hz = float(bandwidth_hz)
-        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * self.bandwidth_hz)
+        self.noise_w = float(dbm_to_watt(noise_psd_dbm_per_hz) * bandwidth_hz)
 
         self.reward_mode = str(reward_mode)
         self.reward_success = float(reward_success)
         self.reward_collision = float(reward_collision)
         self.reward_idle_empty = float(reward_idle_empty)
         self.reward_idle_nonempty = float(reward_idle_nonempty)
-        self.reward_tx_attempt = float(reward_tx_attempt)
-        self.reward_repeat_success = float(reward_repeat_success)
-        self.reward_repeat_collision = float(reward_repeat_collision)
-        self.reward_neighbor_slot_conflict = float(reward_neighbor_slot_conflict)
         self.lambda_coop = float(lambda_coop)
 
         self._rng = np.random.default_rng()
@@ -128,17 +118,6 @@ class LAWNEnv:
 
         # Per-frame sampled channel (large-scale + fading) for THIS state.
         self._ch: ChannelSample | None = None
-
-        # Optional teacher (for training-time distillation only).
-        self.enable_greedy_teacher: bool = False
-        self._greedy_teacher = None
-
-    def _get_greedy_teacher(self):
-        from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
-
-        if self._greedy_teacher is None:
-            self._greedy_teacher = GreedyColoringAgent(self.K)
-        return self._greedy_teacher
 
     def reset(self, *, seed: int | None = None) -> GraphObs:
         if seed is not None:
@@ -182,11 +161,6 @@ class LAWNEnv:
         )
         adj = obs.adj  # uint8 (N,N)
 
-        teacher_actions = None
-        if self.enable_greedy_teacher:
-            # Teacher is centralized and may use env internal PHY snapshot (CTDE).
-            teacher_actions = self._get_greedy_teacher().select_actions(env=self, obs_x=obs.x).astype(np.int64)
-
         # --- Transmission attempt mask ---
         has_pkt = self.traffic.queues > 0
         tx_mask = has_pkt & (actions < self.K)
@@ -213,10 +187,11 @@ class LAWNEnv:
         success = tx_mask & (sinr >= self.sinr_threshold_lin)
         collision = tx_mask & (~success)
 
-        delays, per_node_delay = self.traffic.serve_successes_with_per_node_delay(success_mask=success, t=frame_t)
+        delays = self.traffic.serve_successes(success_mask=success, t=frame_t)
 
         # --- Rewards ---
         r_perf = np.zeros((self.N,), dtype=np.float32)
+        r_pen = np.zeros((self.N,), dtype=np.float32)
 
         if self.reward_mode == "rate":
             r_perf[success] = (self.reward_success * np.log2(1.0 + sinr[success])).astype(np.float32)
@@ -228,34 +203,8 @@ class LAWNEnv:
         idle_nonempty = idle & has_pkt
 
         r_perf[idle_empty] = self.reward_idle_empty
-        r_perf[collision] = self.reward_collision
-        r_perf[idle_nonempty] = self.reward_idle_nonempty
-
-        # Encourage "dare to transmit" when having backlog (static, local).
-        if float(self.reward_tx_attempt) != 0.0:
-            r_perf[tx_mask] += self.reward_tx_attempt
-
-        # Semi-persistent shaping (local): keep slot after success; avoid stubborn repeats after collision.
-        if float(self.reward_repeat_success) != 0.0 or float(self.reward_repeat_collision) != 0.0:
-            prev_tx = self.last_actions < self.K
-            repeat_slot = tx_mask & prev_tx & (actions == self.last_actions)
-            prev_success = self.last_status == self.STATUS_SUCCESS
-            prev_collision = self.last_status == self.STATUS_COLLISION
-            r_perf[repeat_slot & prev_success] += self.reward_repeat_success
-            r_perf[repeat_slot & prev_collision] += self.reward_repeat_collision
-
-        # Local anti-synchronization: discourage choosing a slot that many IN-neighbors used last frame.
-        if float(self.reward_neighbor_slot_conflict) != 0.0:
-            in_deg_prev = adj.sum(axis=0).astype(np.float32)  # (N,)
-            last_tx = (self.last_actions < self.K).astype(np.uint8)
-            chosen = actions.copy()
-            for s in range(self.K):
-                mask_last_s = ((self.last_actions == s).astype(np.uint8) & last_tx).astype(np.float32)  # (N,)
-                count_s = adj.T.astype(np.float32) @ mask_last_s  # (N,)
-                sel = (tx_mask & (chosen == s)).astype(np.float32)
-                if np.any(sel > 0):
-                    norm = np.maximum(in_deg_prev, 1.0)
-                    r_perf += self.reward_neighbor_slot_conflict * (count_s / norm) * sel
+        r_pen[collision] = self.reward_collision
+        r_pen[idle_nonempty] = self.reward_idle_nonempty
 
         # Cooperative term over IN-neighbors: N_i = { j | j -> i }
         in_deg = adj.sum(axis=0).astype(np.float32)  # (N,)
@@ -264,7 +213,7 @@ class LAWNEnv:
         mask = in_deg > 0
         r_coop[mask] = self.lambda_coop * (coop_sum[mask] / in_deg[mask])
 
-        rewards = r_perf + r_coop
+        rewards = r_perf + r_pen + r_coop
 
         # --- Update last-action/status for next observation ---
         # Only record actual transmission attempt (or No-Tx). If no packet, treat as No-Tx.
@@ -289,19 +238,9 @@ class LAWNEnv:
         # Metrics
         attempts = int(tx_mask.sum())
         n_coll = int(collision.sum())
-        per_node_se = np.zeros((self.N,), dtype=np.float32)
-        if np.any(success):
-            per_node_se[success] = np.log2(1.0 + sinr[success]).astype(np.float32)
-        sum_rate = float(per_node_se.sum())
-        from gac_mac.utils.metrics import spectral_eff_sum_to_mbps_per_frame
-
-        throughput_mbps = spectral_eff_sum_to_mbps_per_frame(
-            sum_rate, bandwidth_hz=self.bandwidth_hz, num_slots=self.K
-        )
-        per_node_thr_mbps = (per_node_se * (self.bandwidth_hz / float(self.K)) / 1e6).astype(np.float32)
+        sum_rate = float(np.log2(1.0 + sinr[success]).sum()) if np.any(success) else 0.0
         info = StepInfo(
             sum_rate=sum_rate,
-            throughput_mbps=throughput_mbps,
             collision_rate=float(n_coll / max(1, attempts)),
             avg_delay=float(np.mean(delays)) if delays else 0.0,
             tx_attempts=attempts,
@@ -309,18 +248,7 @@ class LAWNEnv:
             tx_collision=n_coll,
             avg_degree_in=float(in_deg.mean()),
         )
-        return self._get_obs(), rewards, done, {
-            "t": self._t,
-            **info.__dict__,
-            **({"teacher_actions": teacher_actions} if teacher_actions is not None else {}),
-            # Per-node episode accounting (for evaluation only; policy doesn't need this).
-            "per_node_spectral_eff": per_node_se,
-            "per_node_throughput_mbps": per_node_thr_mbps,
-            "per_node_tx_attempt": tx_mask.astype(np.uint8),
-            "per_node_tx_success": success.astype(np.uint8),
-            "per_node_tx_collision": collision.astype(np.uint8),
-            "per_node_delay_served": per_node_delay,
-        }
+        return self._get_obs(), rewards, done, {"t": self._t, **info.__dict__}
 
     def _get_obs(self) -> GraphObs:
         if self._ch is None:

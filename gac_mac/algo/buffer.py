@@ -17,7 +17,6 @@ class RolloutBatch:
     rewards: list[torch.Tensor]  # each (N,)
     dones: list[torch.Tensor]  # each (N,) float 0/1
     h_in: list[torch.Tensor]  # each (N, H)
-    teacher_actions: list[torch.Tensor] | None = None  # each (N,) int64
 
     advantages: list[torch.Tensor] | None = None  # each (N,)
     returns: list[torch.Tensor] | None = None  # each (N,)
@@ -43,7 +42,6 @@ class RolloutBuffer:
         self.rewards: list[torch.Tensor] = []
         self.dones: list[torch.Tensor] = []
         self.h_in: list[torch.Tensor] = []
-        self.teacher_actions: list[torch.Tensor] | None = None
         self.advantages: list[torch.Tensor] | None = None
         self.returns: list[torch.Tensor] | None = None
 
@@ -59,7 +57,6 @@ class RolloutBuffer:
         rewards: torch.Tensor,
         done: bool | torch.Tensor,
         h_in: torch.Tensor,
-        teacher_actions: torch.Tensor | None = None,
     ) -> None:
         self.x.append(x.detach().cpu())
         self.edge_index.append(edge_index.detach().cpu())
@@ -74,10 +71,6 @@ class RolloutBuffer:
             done_f = torch.full_like(rewards, 1.0 if done else 0.0)
         self.dones.append(done_f.detach().cpu())
         self.h_in.append(h_in.detach().cpu())
-        if teacher_actions is not None:
-            if self.teacher_actions is None:
-                self.teacher_actions = []
-            self.teacher_actions.append(teacher_actions.detach().to(dtype=torch.long).cpu())
 
     def compute_gae(
         self,
@@ -126,7 +119,6 @@ class RolloutBuffer:
             rewards=self.rewards,
             dones=self.dones,
             h_in=self.h_in,
-            teacher_actions=self.teacher_actions,
             advantages=self.advantages,
             returns=self.returns,
         )
