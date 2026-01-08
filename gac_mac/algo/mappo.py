@@ -114,9 +114,25 @@ class MAPPOTrainer:
                         with torch.no_grad():
                             has_pkt = x_t[:, 3] > 0.0
                         if has_pkt.any():
-                            logits = self.agent.action_logits(out.h_out)  # (N, A)
-                            ce = F.cross_entropy(logits[has_pkt], teacher_t[has_pkt], reduction="mean")
-                            distill_losses.append(ce)
+                            if self.agent.policy_mode == "hierarchical":
+                                # Distill Tx decision (binary) + slot (only where teacher transmits).
+                                k_no = self.agent.action_dim - 1
+                                teacher_tx = (teacher_t != k_no) & has_pkt
+
+                                tx_logit = self.agent.tx_head(out.h_out).squeeze(-1)  # (N,)
+                                tx_target = (teacher_t != k_no).to(dtype=tx_logit.dtype)
+                                tx_loss = F.binary_cross_entropy_with_logits(tx_logit[has_pkt], tx_target[has_pkt])
+                                distill_losses.append(tx_loss)
+
+                                if teacher_tx.any():
+                                    slot_logits = self.agent.slot_head(out.h_out)  # (N, K)
+                                    slot_target = torch.clamp(teacher_t, 0, k_no - 1)
+                                    slot_loss = F.cross_entropy(slot_logits[teacher_tx], slot_target[teacher_tx])
+                                    distill_losses.append(slot_loss)
+                            else:
+                                logits = self.agent.action_logits(out.h_out)  # (N, A)
+                                ce = F.cross_entropy(logits[has_pkt], teacher_t[has_pkt], reduction="mean")
+                                distill_losses.append(ce)
 
                 new_logp_seg = torch.stack(new_logps, dim=0)  # (L,N)
                 values_seg = torch.stack(values, dim=0)  # (L,N)
