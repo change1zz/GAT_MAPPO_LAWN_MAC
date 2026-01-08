@@ -106,4 +106,13 @@
   - Optional agent-id tie-break (v3 only): `--agent-id-tiebreak-eps`
   - Optional argmax rollout collection: `--rollout-policy argmax`
   - Periodic argmax eval + best checkpoint: `--eval-every/--eval-episodes` saves `checkpoints/checkpoint_best_argmax.pth`
+
+## 2026-01-08 (Argmax Throughput Optimization: conflict graph + bigger model)
+
+- Key finding: switching `GraphBuilder` to `--graph-mode conflict` is the most impactful change for deterministic argmax evaluation.
+- Best so far (argmax policy):
+  - Run: `results/opt4_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-200453/`
+  - Config highlights: `--graph-mode conflict --hidden-dim 128 --gat-heads 4 --lr 1e-4 --agent-id-tiebreak-eps 0.1 --reward-idle-nonempty -0.7`
+  - Best checkpoint: `results/opt4_argmax_conflict_hd128h4_v3_lr1e4_tie01_idle07-20260108-200453/checkpoints/checkpoint_best_argmax.pth`
+  - `evaluate --policy argmax --episodes 30`: `thr 54.754 Mbps | coll 0.644 | jain 0.103` (close to CSMA baseline in this setting)
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
