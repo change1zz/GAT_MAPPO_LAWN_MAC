@@ -57,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--num-envs", type=int, default=None, help="Vectorized rollout envs (>=1).")
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
     p.add_argument("--pretrain-greedy-steps", type=int, default=None, help="Supervised warm-start steps using Greedy teacher (0=off).")
+    p.add_argument("--pretrain-only", action="store_true", help="Run greedy warm-start then save checkpoint and exit.")
     p.add_argument("--rollout-policy", type=str, default="sample", choices=["sample", "argmax"], help="Action selection during rollout collection.")
     p.add_argument("--rollout-temperature", type=float, default=1.0, help="Sampling temperature for rollout-policy=sample (smaller => more deterministic).")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth")
@@ -360,6 +361,29 @@ def main() -> None:
 
             if (s + 1) % 200 == 0:
                 print(f"[pretrain] step {s+1:05d} | ce {float(np.mean(pre_losses[-200:])):.4f}", flush=True)
+
+        pre_ckpt_path = os.path.join(ckpt_dir, "checkpoint_pretrain.pth")
+        save_checkpoint(
+            pre_ckpt_path,
+            {
+                "config": asdict(cfg),
+                "update": -1,
+                "global_step": global_step,
+                "agent_state_dict": agent.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "rolling": rolling,
+                "pretrain": {"steps": int(cfg.pretrain_greedy_steps), "ce_last200": float(np.mean(pre_losses[-200:])) if pre_losses else None},
+            },
+        )
+        print(f"[pretrain] saved: {pre_ckpt_path}", flush=True)
+        if args.pretrain_only:
+            if vec_env is not None:
+                vec_env.close()
+            if writer is not None:
+                writer.flush()
+                writer.close()
+            print(f"Done (pretrain-only). Outputs in: {run_dir}", flush=True)
+            return
 
     for update in range(start_update, cfg.total_updates):
         buffer.reset()
