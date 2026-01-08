@@ -58,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
     p.add_argument("--pretrain-greedy-steps", type=int, default=None, help="Supervised warm-start steps using Greedy teacher (0=off).")
     p.add_argument("--pretrain-only", action="store_true", help="Run greedy warm-start then save checkpoint and exit.")
+    p.add_argument("--pretrain-no-tx-weight", type=float, default=0.2, help="Down-weight NoTx class in greedy pretrain CE (smaller => less collapse).")
     p.add_argument("--rollout-policy", type=str, default="sample", choices=["sample", "argmax"], help="Action selection during rollout collection.")
     p.add_argument("--rollout-temperature", type=float, default=1.0, help="Sampling temperature for rollout-policy=sample (smaller => more deterministic).")
     p.add_argument("--resume", type=str, default=None, help="Path to checkpoint .pth")
@@ -327,15 +328,20 @@ def main() -> None:
             logits, h_out = agent.forward_logits(x, edge_index, edge_attr, pre_h.detach())
             q_norm = x[:, 3] if x.numel() > 0 and x.size(-1) > 3 else torch.zeros((logits.size(0),), device=device)
             active = q_norm > 0.0
-            loss_active = (
-                F.cross_entropy(logits[active], teacher_actions[active]) if bool(active.any().item()) else logits.sum() * 0.0
-            )
-            loss_inactive = (
-                F.cross_entropy(logits[~active], teacher_actions[~active])
-                if bool((~active).any().item())
-                else logits.sum() * 0.0
-            )
-            loss = loss_active + 0.1 * loss_inactive
+            w_no = float(max(0.0, args.pretrain_no_tx_weight))
+
+            def _weighted_ce(logits_sub: torch.Tensor, labels_sub: torch.Tensor) -> torch.Tensor:
+                if logits_sub.numel() == 0:
+                    return logits.sum() * 0.0
+                per = F.cross_entropy(logits_sub, labels_sub, reduction="none")  # (M,)
+                is_no = labels_sub == int(cfg.num_slots)  # NoTx index
+                weights = torch.where(is_no, torch.full_like(per, w_no), torch.ones_like(per))
+                return (per * weights).mean()
+
+            loss_active = _weighted_ce(logits[active], teacher_actions[active])
+            # Inactive nodes don't matter at inference (env masks), but keep a tiny signal to avoid garbage logits.
+            loss_inactive = _weighted_ce(logits[~active], teacher_actions[~active]) if bool((~active).any().item()) else logits.sum() * 0.0
+            loss = loss_active + 0.05 * loss_inactive
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
