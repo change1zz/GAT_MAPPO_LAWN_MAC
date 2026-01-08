@@ -50,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--conflict-loss-coef", type=float, default=None)
     p.add_argument("--agent-id-tiebreak-eps", type=float, default=None)
+    p.add_argument("--neighbor-last-action-mask", action="store_true", help="Mask slots used by in-neighbors in last frame (local, uses GNN neighbor features).")
+    p.add_argument("--neighbor-last-action-penalty", type=float, default=None, help="Logit penalty for slots used by in-neighbors in last frame (0=off).")
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-success", type=float, default=None)
     p.add_argument("--reward-collision", type=float, default=None)
@@ -123,6 +125,10 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "conflict_loss_coef": float(args.conflict_loss_coef)})
     if args.agent_id_tiebreak_eps is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "agent_id_tiebreak_eps": float(args.agent_id_tiebreak_eps)})
+    if args.neighbor_last_action_mask:
+        cfg = cfg.__class__(**{**asdict(cfg), "neighbor_last_action_mask": True})
+    if args.neighbor_last_action_penalty is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "neighbor_last_action_penalty": float(args.neighbor_last_action_penalty)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
     if args.reward_success is not None:
@@ -348,6 +354,8 @@ def main() -> None:
         use_edge_attr=cfg.use_edge_attr,
         use_agent_id_tiebreak=(cfg.obs_version == "v3" and cfg.agent_id_tiebreak_eps > 0.0),
         agent_id_tiebreak_eps=cfg.agent_id_tiebreak_eps,
+        neighbor_last_action_mask=cfg.neighbor_last_action_mask,
+        neighbor_last_action_penalty=cfg.neighbor_last_action_penalty,
     ).to(device)
     optimizer = torch.optim.Adam(agent.parameters(), lr=cfg.lr)
 

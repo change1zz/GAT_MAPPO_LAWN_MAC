@@ -69,6 +69,8 @@ class Config:
     hidden_dim: int = 64
     gat_heads: int = 2
     agent_id_tiebreak_eps: float = 0.0
+    neighbor_last_action_mask: bool = False
+    neighbor_last_action_penalty: float = 0.0
 
     # --- PPO / MAPPO ---
     lr: float = 3e-4

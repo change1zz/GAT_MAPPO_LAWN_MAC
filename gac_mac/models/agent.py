@@ -30,12 +30,16 @@ class GACMACAgent(nn.Module):
         use_edge_attr: bool = True,
         use_agent_id_tiebreak: bool = False,
         agent_id_tiebreak_eps: float = 0.0,
+        neighbor_last_action_mask: bool = False,
+        neighbor_last_action_penalty: float = 0.0,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
         self.action_dim = int(action_dim)
         self.use_agent_id_tiebreak = bool(use_agent_id_tiebreak)
         self.agent_id_tiebreak_eps = float(agent_id_tiebreak_eps)
+        self.neighbor_last_action_mask = bool(neighbor_last_action_mask)
+        self.neighbor_last_action_penalty = float(neighbor_last_action_penalty)
 
         edge_dim = 1 if use_edge_attr else None
         self.encoder = STGNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, heads=gat_heads, edge_dim=edge_dim)
@@ -82,12 +86,51 @@ class GACMACAgent(nn.Module):
         bias[torch.arange(logits.size(0), device=logits.device), pref] = eps
         return logits + bias
 
+    def _apply_neighbor_last_action_constraints(self, logits: torch.Tensor, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+        if (not self.neighbor_last_action_mask) and self.neighbor_last_action_penalty <= 0.0:
+            return logits
+        if edge_index.numel() == 0:
+            return logits
+        a = int(logits.size(-1))
+        if a < 2:
+            return logits
+        # x layout ends with: last_act_oh (A), last_status_oh (3), in_deg_norm (1)
+        f = int(x.size(-1))
+        last_act_start = f - (a + 3 + 1)
+        if last_act_start < 0:
+            return logits
+        last_act_oh = x[:, last_act_start : last_act_start + a]
+        if last_act_oh.numel() == 0:
+            return logits
+        last_act = torch.argmax(last_act_oh, dim=-1)  # (N,)
+
+        k = a - 1  # slots
+        src = edge_index[0].long()
+        dst = edge_index[1].long()
+        last_src = last_act[src]
+        valid = (last_src >= 0) & (last_src < k)
+        if not bool(valid.any().item()):
+            return logits
+
+        forbidden = torch.zeros((x.size(0), k), dtype=torch.bool, device=logits.device)
+        forbidden[dst[valid], last_src[valid]] = True
+
+        out = logits
+        if self.neighbor_last_action_penalty > 0.0:
+            out = out.clone()
+            out[:, :k] = out[:, :k] - self.neighbor_last_action_penalty * forbidden.to(dtype=out.dtype)
+        if self.neighbor_last_action_mask:
+            out = out.clone()
+            out[:, :k] = out[:, :k].masked_fill(forbidden, -1e9)
+        return out
+
     def forward_logits(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, h_in: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor]:
         h_out = self.encoder(x, edge_index, edge_attr, h_in)
         logits = self.actor(h_out)
         logits = self._apply_agent_id_tiebreak(logits, x)
+        logits = self._apply_neighbor_last_action_constraints(logits, x, edge_index)
         return logits, h_out
 
     def initial_hidden(self, num_nodes: int, device: torch.device) -> torch.Tensor:

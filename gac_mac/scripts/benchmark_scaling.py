@@ -134,6 +134,8 @@ def main() -> None:
         use_edge_attr=base_cfg.use_edge_attr,
         use_agent_id_tiebreak=(base_cfg.obs_version == "v3" and getattr(base_cfg, "agent_id_tiebreak_eps", 0.0) > 0.0),
         agent_id_tiebreak_eps=getattr(base_cfg, "agent_id_tiebreak_eps", 0.0),
+        neighbor_last_action_mask=getattr(base_cfg, "neighbor_last_action_mask", False),
+        neighbor_last_action_penalty=getattr(base_cfg, "neighbor_last_action_penalty", 0.0),
     ).to(device)
     agent.load_state_dict(ckpt["agent_state_dict"])
     agent.eval()
