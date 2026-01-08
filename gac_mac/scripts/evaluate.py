@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
         "--policy",
         type=str,
         default="sample",
-        choices=["grouped", "argmax", "sample"],
+        choices=["grouped", "argmax", "sample", "tx_threshold"],
         help="Action selection for GAC-MAC. 'grouped' compares P(Tx)=sum(slots) vs P(NoTx).",
     )
     p.add_argument(
@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Sampling temperature for GAC-MAC when --policy sample (smaller => more deterministic).",
+    )
+    p.add_argument(
+        "--tx-threshold",
+        type=float,
+        default=0.3,
+        help="Transmit if P(Tx) > threshold (used by --policy tx_threshold).",
     )
     p.add_argument("--no-action-mask", action="store_true", help="Disable queue-based action masking.")
     p.add_argument(
@@ -280,11 +286,15 @@ def main() -> None:
                 if args.policy == "argmax":
                     act = torch.argmax(probs, dim=-1)
                 else:
-                    # grouped: compare transmit mass vs no-tx
+                    # grouped/tx_threshold: compare transmit mass vs no-tx (or threshold on transmit mass)
                     p_no = probs[:, cfg.num_slots]
                     p_tx = probs[:, : cfg.num_slots].sum(dim=-1)
                     best_slot = torch.argmax(probs[:, : cfg.num_slots], dim=-1)
-                    act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                    if args.policy == "tx_threshold":
+                        tau = float(args.tx_threshold)
+                        act = torch.where(p_tx > tau, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                    else:
+                        act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
         gac_policy.h = h_out.detach()
         return act.cpu().numpy()
 

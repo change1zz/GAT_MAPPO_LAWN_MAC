@@ -34,6 +34,7 @@ class MAPPOTrainer:
         entropy_coef: float,
         target_kl: float | None = None,
         distill_coef: float = 0.0,
+        distill_mode: str = "slot_only",
         max_grad_norm: float,
         device: torch.device,
     ) -> None:
@@ -46,6 +47,7 @@ class MAPPOTrainer:
         self.entropy_coef = float(entropy_coef)
         self.target_kl = None if target_kl is None else float(target_kl)
         self.distill_coef = float(distill_coef)
+        self.distill_mode = str(distill_mode)
         self.max_grad_norm = float(max_grad_norm)
         self.device = device
 
@@ -115,14 +117,15 @@ class MAPPOTrainer:
                             has_pkt = x_t[:, 3] > 0.0
                         if has_pkt.any():
                             if self.agent.policy_mode == "hierarchical":
-                                # Distill Tx decision (binary) + slot (only where teacher transmits).
+                                # Distill slot labels for teacher-Tx nodes. Optionally also distill Tx decision.
                                 k_no = self.agent.action_dim - 1
                                 teacher_tx = (teacher_t != k_no) & has_pkt
 
-                                tx_logit = self.agent.tx_head(out.h_out).squeeze(-1)  # (N,)
-                                tx_target = (teacher_t != k_no).to(dtype=tx_logit.dtype)
-                                tx_loss = F.binary_cross_entropy_with_logits(tx_logit[has_pkt], tx_target[has_pkt])
-                                distill_losses.append(tx_loss)
+                                if self.distill_mode == "tx_slot":
+                                    tx_logit = self.agent.tx_head(out.h_out).squeeze(-1)  # (N,)
+                                    tx_target = (teacher_t != k_no).to(dtype=tx_logit.dtype)
+                                    tx_loss = F.binary_cross_entropy_with_logits(tx_logit[has_pkt], tx_target[has_pkt])
+                                    distill_losses.append(tx_loss)
 
                                 if teacher_tx.any():
                                     slot_logits = self.agent.slot_head(out.h_out)  # (N, K)

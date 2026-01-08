@@ -20,8 +20,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--step", type=int, default=0, help="Frame index to snapshot (0-based)")
-    p.add_argument("--policy", type=str, default="sample", choices=["sample", "argmax", "grouped"])
+    p.add_argument("--policy", type=str, default="sample", choices=["sample", "argmax", "grouped", "tx_threshold"])
     p.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature for --policy sample.")
+    p.add_argument("--tx-threshold", type=float, default=0.3, help="Transmit if P(Tx)>threshold for tx_threshold.")
     p.add_argument("--out", type=str, default="topology_snapshot.png")
     return p.parse_args()
 
@@ -128,7 +129,11 @@ def main() -> None:
                     p_no = probs[:, cfg.num_slots]
                     p_tx = probs[:, : cfg.num_slots].sum(dim=-1)
                     best_slot = torch.argmax(probs[:, : cfg.num_slots], dim=-1)
-                    act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                    if args.policy == "tx_threshold":
+                        tau = float(args.tx_threshold)
+                        act = torch.where(p_tx > tau, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                    else:
+                        act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
                     actions = act.cpu().numpy()
 
         if t == args.step:

@@ -93,6 +93,7 @@ class Config:
 
     # --- Imitation / Distillation (optional) ---
     distill_coef: float = 0.0
+    distill_mode: str = "slot_only"  # "slot_only" | "tx_slot"
 
     # --- Runtime / checkpointing ---
     num_envs: int = 1  # parallel rollout environments (vectorized)

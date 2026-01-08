@@ -49,6 +49,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--entropy-coef", type=float, default=None)
     p.add_argument("--target-kl", type=float, default=None, help="Early stop PPO epochs if approx_kl exceeds this.")
     p.add_argument("--distill-coef", type=float, default=None, help="Greedy-teacher distillation coefficient (0=off).")
+    p.add_argument(
+        "--distill-mode",
+        type=str,
+        default=None,
+        choices=["slot_only", "tx_slot"],
+        help="Distill only slot labels for teacher-Tx nodes, or distill Tx+slot.",
+    )
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
@@ -117,6 +124,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "target_kl": float(args.target_kl)})
     if args.distill_coef is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "distill_coef": float(args.distill_coef)})
+    if args.distill_mode is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "distill_mode": str(args.distill_mode)})
     if args.reward_mode is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_mode": str(args.reward_mode)})
     if args.reward_collision is not None:
@@ -274,6 +283,7 @@ def main() -> None:
         entropy_coef=cfg.entropy_coef,
         target_kl=getattr(cfg, "target_kl", None),
         distill_coef=getattr(cfg, "distill_coef", 0.0),
+        distill_mode=getattr(cfg, "distill_mode", "slot_only"),
         max_grad_norm=cfg.max_grad_norm,
         device=device,
     )
