@@ -113,9 +113,14 @@ class MAPPOTrainer:
                         teacher_t = batch.teacher_actions[t].to(self.device)
                         with torch.no_grad():
                             has_pkt = x_t[:, 3] > 0.0
-                        if has_pkt.any():
+                            # Only distill slot choices for nodes that the teacher schedules to transmit.
+                            # This avoids over-penalizing the student for opportunistic transmissions when
+                            # the centralized teacher prefers No-Tx.
+                            teacher_tx = teacher_t != (self.agent.action_dim - 1)
+                            distill_mask = has_pkt & teacher_tx
+                        if distill_mask.any():
                             logits = self.agent.action_logits(out.h_out)  # (N, A)
-                            ce = F.cross_entropy(logits[has_pkt], teacher_t[has_pkt], reduction="mean")
+                            ce = F.cross_entropy(logits[distill_mask], teacher_t[distill_mask], reduction="mean")
                             distill_losses.append(ce)
 
                 new_logp_seg = torch.stack(new_logps, dim=0)  # (L,N)
