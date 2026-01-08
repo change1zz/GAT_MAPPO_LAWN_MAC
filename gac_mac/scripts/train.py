@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--reward-mode", type=str, default=None, choices=["binary", "rate"])
     p.add_argument("--reward-collision", type=float, default=None)
     p.add_argument("--reward-idle-nonempty", type=float, default=None)
+    p.add_argument("--reward-tx-attempt", type=float, default=None)
     p.add_argument("--lambda-coop", type=float, default=None)
     p.add_argument("--num-envs", type=int, default=None, help="Vectorized rollout envs (>=1).")
     p.add_argument("--parallel-env", action="store_true", help="Use subprocess envs when --num-envs>1.")
@@ -122,6 +123,8 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_collision": float(args.reward_collision)})
     if args.reward_idle_nonempty is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "reward_idle_nonempty": float(args.reward_idle_nonempty)})
+    if args.reward_tx_attempt is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "reward_tx_attempt": float(args.reward_tx_attempt)})
     if args.lambda_coop is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "lambda_coop": float(args.lambda_coop)})
     if args.num_envs is not None:
@@ -172,6 +175,7 @@ def main() -> None:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
+            reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
             reward_repeat_success=cfg.reward_repeat_success,
             reward_repeat_collision=cfg.reward_repeat_collision,
             lambda_coop=cfg.lambda_coop,
@@ -217,6 +221,7 @@ def main() -> None:
             reward_collision=cfg.reward_collision,
             reward_idle_empty=cfg.reward_idle_empty,
             reward_idle_nonempty=cfg.reward_idle_nonempty,
+            reward_tx_attempt=getattr(cfg, "reward_tx_attempt", 0.0),
             reward_repeat_success=cfg.reward_repeat_success,
             reward_repeat_collision=cfg.reward_repeat_collision,
             lambda_coop=cfg.lambda_coop,

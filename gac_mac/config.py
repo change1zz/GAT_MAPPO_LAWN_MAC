@@ -70,6 +70,7 @@ class Config:
     reward_collision: float = -1.0
     reward_idle_empty: float = 0.1
     reward_idle_nonempty: float = -1.0
+    reward_tx_attempt: float = 0.1
     reward_repeat_success: float = 0.2
     reward_repeat_collision: float = -0.2
     lambda_coop: float = 0.5

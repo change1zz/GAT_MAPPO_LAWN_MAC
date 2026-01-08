@@ -41,6 +41,7 @@ class ToyLawnEnv:
         reward_collision: float,
         reward_idle_empty: float,
         reward_idle_nonempty: float,
+        reward_tx_attempt: float,
         reward_repeat_success: float,
         reward_repeat_collision: float,
         lambda_coop: float,
@@ -58,6 +59,7 @@ class ToyLawnEnv:
         self.reward_collision = float(reward_collision)
         self.reward_idle_empty = float(reward_idle_empty)
         self.reward_idle_nonempty = float(reward_idle_nonempty)
+        self.reward_tx_attempt = float(reward_tx_attempt)
         self.reward_repeat_success = float(reward_repeat_success)
         self.reward_repeat_collision = float(reward_repeat_collision)
         self.lambda_coop = float(lambda_coop)
@@ -162,6 +164,9 @@ class ToyLawnEnv:
         r_perf[idle_empty] = self.reward_idle_empty
         r_perf[collision] = self.reward_collision
         r_perf[idle_nonempty] = self.reward_idle_nonempty
+
+        if float(self.reward_tx_attempt) != 0.0:
+            r_perf[tx_mask] += self.reward_tx_attempt
 
         if float(self.reward_repeat_success) != 0.0 or float(self.reward_repeat_collision) != 0.0:
             prev_tx = self.last_actions < self.K
