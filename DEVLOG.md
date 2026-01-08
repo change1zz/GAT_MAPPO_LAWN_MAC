@@ -91,4 +91,18 @@
 - Best checkpoint found so far (10 seeds eval, `--policy sample --temperature 0.7`):
   - `results/B_distill_rate_reward-20260108-125732/checkpoints/checkpoint_0050.pth`
   - `thr 8.539 Mbps | coll 0.514 | jain 0.860`
+
+## 2026-01-08 (Baseline Lock + Armax Debug)
+
+- Baseline frozen from backup directory:
+  - Branch: `baseline/pre_scale_units_20260107-104422`
+  - Tag: `baseline-pre_scale_units_20260107-104422`
+- New work branch from that tag: `exp/argmax-flat-opt`
+- Eval alignment:
+  - `LAWNEnv` now reports `sum_rate_mbps` + `jain` in step `info` (used by `scripts/evaluate.py` and plots).
+- Training knobs added to reduce argmax collapse (still within flat `K+1` action space):
+  - Optional greedy warm-start: `--pretrain-greedy-steps`
+  - Optional conflict regularizer: `--conflict-loss-coef`
+  - Optional agent-id tie-break (v3 only): `--agent-id-tiebreak-eps`
+  - Optional argmax rollout collection: `--rollout-policy argmax`
 - Convergence check: later checkpoints in the same run stay around ~`8.39–8.50 Mbps` (no consistent improvement beyond `checkpoint_0050.pth`).
