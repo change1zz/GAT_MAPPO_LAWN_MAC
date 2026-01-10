@@ -6,8 +6,11 @@ from dataclasses import asdict
 import numpy as np
 
 from gac_mac.baselines.csma import CSMAAgent
+from gac_mac.baselines.aloha import AlohaAgent
+from gac_mac.baselines.fixed_tdma import FixedTDMAAgent
 from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
 from gac_mac.baselines.random_agent import RandomAgent
+from gac_mac.baselines.satmac import SATMACAgent
 from gac_mac.config import Config
 from gac_mac.env.channel import ChannelModel
 from gac_mac.env.lawn_env import LAWNEnv
@@ -277,10 +280,20 @@ def main() -> None:
     def random_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
         return random_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
+    aloha_agent = AlohaAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)), p_tx=0.2)
+
+    def aloha_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
+        return aloha_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+
     greedy_agent = GreedyColoringAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def greedy_policy(_env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
         return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+
+    tdma_agent = FixedTDMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
+
+    def tdma_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
+        return tdma_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
     csma_agent = CSMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
 
@@ -288,12 +301,21 @@ def main() -> None:
         # Use env.last_status as ACK feedback.
         return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
+    satmac_agent = SATMACAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)), p_reselect=1.0)
+
+    def satmac_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
+        return satmac_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+
     results = []
     results.append(run_policy("GAC-MAC", gac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
     results.append(run_policy("Random", random_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    results.append(run_policy("ALOHA", aloha_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
     results.append(run_policy("Greedy", greedy_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    results.append(run_policy("TDMA", tdma_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
     csma_policy.reset = csma_agent.reset  # type: ignore[attr-defined]
     results.append(run_policy("CSMA", csma_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    satmac_policy.reset = satmac_agent.reset  # type: ignore[attr-defined]
+    results.append(run_policy("SATMAC", satmac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
 
     print("=== Evaluation (mean over episodes) ===")
     for r in results:

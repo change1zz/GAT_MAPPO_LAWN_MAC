@@ -325,6 +325,20 @@
 - 输出：
   - 图：`runs_density\\mc6L2_secondaryLBT-20260110-155625\\density_lines.png`
   - 数据：`runs_density\\mc6L2_secondaryLBT-20260110-155625\\density_lines.json`
+
+## 2026-01-10 (复现更多 baselines：ALOHA / 固定TDMA / SATMAC，并纳入密度折线图)
+
+- 新增 baselines：
+  - `gac_mac/baselines/aloha.py`：Slotted ALOHA（p_tx=0.2，队列非空时以概率尝试）
+  - `gac_mac/baselines/fixed_tdma.py`：固定 TDMA（按 node_id 映射到 (ch,slot)）
+  - `gac_mac/baselines/satmac.py`：简化 SATMAC（成功保持、碰撞重选，使用 ACK feedback）
+- 已接入评估脚本：
+  - `gac_mac/scripts/evaluate.py`：增加 ALOHA/TDMA/SATMAC 输出
+  - `gac_mac/scripts/benchmark_density.py`：密度扫参时纳入以上 baselines
+- 密度折线（含全部 baselines，C=6,L=2，secondary_lbt=ON，argmax，30 eps）：
+  - `conda run -n intelligent_AJ python -m gac_mac.scripts.benchmark_density --checkpoint runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth --ns "20,30,40,50,60,80" --episodes 30 --seed 123 --policy argmax --device cuda --secondary-lbt --run-name mc6L2_secondaryLBT_allBaselines --results-dir runs_density`
+  - 图：`runs_density\\mc6L2_secondaryLBT_allBaselines-20260110-170013\\density_lines.png`
+  - 数据：`runs_density\\mc6L2_secondaryLBT_allBaselines-20260110-170013\\density_lines.json`
 ## 2026-01-09 (Greedy 模仿学习预训练：C=6,L=2 失败尝试)
 
 - 目的：用 Greedy teacher 先把确定性策略拉到可用区，再用 PPO 微调（避免从随机策略开始的塌缩）。
