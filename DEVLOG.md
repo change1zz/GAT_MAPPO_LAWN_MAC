@@ -339,6 +339,18 @@
   - `conda run -n intelligent_AJ python -m gac_mac.scripts.benchmark_density --checkpoint runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth --ns "20,30,40,50,60,80" --episodes 30 --seed 123 --policy argmax --device cuda --secondary-lbt --run-name mc6L2_secondaryLBT_allBaselines --results-dir runs_density`
   - 图：`runs_density\\mc6L2_secondaryLBT_allBaselines-20260110-170013\\density_lines.png`
   - 数据：`runs_density\\mc6L2_secondaryLBT_allBaselines-20260110-170013\\density_lines.json`
+
+## 2026-01-10 (Baseline 对齐：引入 H-SATMAC 风格基线 + Baseline 发送次数对齐论文)
+
+- 动机：之前默认把 baselines 也按 `L=2` 允许每帧发多次，会让 Random/CSMA/ALOHA 等“论文默认单次发送”的协议在碰撞指标上吃亏，容易被质疑“胜之不武”。
+- 修正：
+  - `gac_mac/scripts/evaluate.py` 与 `gac_mac/scripts/benchmark_density.py` 新增 `--baseline-max-tx`（默认 1），确保 baselines 的“每帧发送次数”按论文常见设定对齐。
+  - 新增 `gac_mac/baselines/hsatmac.py`：H-SATMAC 风格混合基线（BS 半持久 + SG 内 CSMA/CA 争用窗口），参数采用论文常见设置 `LSG=4, Lmin=2, Tvalid=4, R=10` 的近似映射（基于位置网格作为 geohash 区域）。
+    - 说明：我们不单独模拟 FI/SGI 控制包开销，而是用 `obs.adj` + `env.last_actions/env.last_status` 近似实现“2-hop 感知 + ACK 反馈”的协议行为。
+- 纸面对齐版密度折线（C=6,L=2 环境不变，但 baselines 强制单次发送；argmax；30 eps）：
+  - `conda run -n intelligent_AJ python -m gac_mac.scripts.benchmark_density --checkpoint runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth --ns "20,30,40,50,60,80" --episodes 30 --seed 123 --policy argmax --device cuda --baseline-max-tx 1 --run-name mc6L2_paperAlignedBaselines --results-dir runs_density`
+  - 图：`runs_density\\mc6L2_paperAlignedBaselines-20260110-171813\\density_lines.png`
+  - 数据：`runs_density\\mc6L2_paperAlignedBaselines-20260110-171813\\density_lines.json`
 ## 2026-01-09 (Greedy 模仿学习预训练：C=6,L=2 失败尝试)
 
 - 目的：用 Greedy teacher 先把确定性策略拉到可用区，再用 PPO 微调（避免从随机策略开始的塌缩）。

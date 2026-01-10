@@ -11,6 +11,7 @@ from gac_mac.baselines.aloha import AlohaAgent
 from gac_mac.baselines.csma import CSMAAgent
 from gac_mac.baselines.fixed_tdma import FixedTDMAAgent
 from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
+from gac_mac.baselines.hsatmac import HSATMACAgent
 from gac_mac.baselines.random_agent import RandomAgent
 from gac_mac.baselines.satmac import SATMACAgent
 from gac_mac.config import Config
@@ -34,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--map-size-m", type=float, default=None, help="Override map size (controls density).")
     p.add_argument("--secondary-lbt", action="store_true", help="Enable secondary-LBT gate (recommended when L>1).")
+    p.add_argument("--baseline-max-tx", type=int, default=1, help="Max transmissions per frame for baselines (paper-aligned default=1).")
     p.add_argument("--run-name", type=str, default="density", help="Run name used for output dir.")
     p.add_argument("--results-dir", type=str, default="runs_density", help="Output root dir.")
     p.add_argument("--out", type=str, default=None, help="Optional output png path (overrides run dir).")
@@ -139,7 +141,7 @@ def main() -> None:
     agent.eval()
 
     results_by_algo: dict[str, dict[str, list[float]]] = {}
-    algos = ["GAC-MAC", "Random", "ALOHA", "TDMA", "SATMAC", "Greedy", "CSMA"]
+    algos = ["GAC-MAC", "Random", "ALOHA", "TDMA", "SATMAC", "H-SAT", "Greedy", "CSMA"]
     keys = [
         "sum_rate_mbps",
         "collision_rate",
@@ -173,6 +175,18 @@ def main() -> None:
         tdma_agent = FixedTDMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
         csma_agent = CSMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
         satmac_agent = SATMACAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)), p_reselect=1.0)
+        hsatmac_agent = HSATMACAgent(
+            cfg.num_slots,
+            cfg.num_uavs,
+            num_channels=int(getattr(cfg, "num_channels", 1)),
+            lsg=4,
+            lmin=2,
+            tvalid=4,
+            num_regions=10,
+            cw_min=4,
+            cw_max=64,
+            burst_q_norm=0.6,
+        )
 
         def _reset_hidden() -> None:
             nonlocal h
@@ -199,25 +213,29 @@ def main() -> None:
         gac_policy.reset = _reset_hidden  # type: ignore[attr-defined]
 
         def random_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-            return random_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return random_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
         def aloha_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-            return aloha_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return aloha_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
         def greedy_policy(_env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
-            return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(max(1, args.baseline_max_tx)))
 
         def tdma_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-            return tdma_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return tdma_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
         def csma_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-            return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
         def satmac_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-            return satmac_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+            return satmac_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(max(1, args.baseline_max_tx)))
+
+        def hsatmac_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
+            return hsatmac_agent.select_actions(env=env, obs=obs, rng=rng, max_tx=int(min(2, max(1, getattr(cfg, "max_tx_per_frame", 1)))))
 
         csma_policy.reset = csma_agent.reset  # type: ignore[attr-defined]
         satmac_policy.reset = satmac_agent.reset  # type: ignore[attr-defined]
+        hsatmac_policy.reset = hsatmac_agent.reset  # type: ignore[attr-defined]
 
         policies = {
             "GAC-MAC": gac_policy,
@@ -227,6 +245,7 @@ def main() -> None:
             "TDMA": tdma_policy,
             "CSMA": csma_policy,
             "SATMAC": satmac_policy,
+            "H-SAT": hsatmac_policy,
         }
 
         for name, policy_fn in policies.items():

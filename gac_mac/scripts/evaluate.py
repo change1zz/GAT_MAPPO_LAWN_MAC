@@ -10,6 +10,7 @@ from gac_mac.baselines.aloha import AlohaAgent
 from gac_mac.baselines.fixed_tdma import FixedTDMAAgent
 from gac_mac.baselines.greedy_coloring import GreedyColoringAgent
 from gac_mac.baselines.random_agent import RandomAgent
+from gac_mac.baselines.hsatmac import HSATMACAgent
 from gac_mac.baselines.satmac import SATMACAgent
 from gac_mac.config import Config
 from gac_mac.env.channel import ChannelModel
@@ -31,6 +32,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--map-size-m", type=float, default=None, help="Override map size in meters (density).")
     p.add_argument("--num-channels", type=int, default=None, help="Override num_channels (C) for evaluation env.")
     p.add_argument("--max-tx-per-frame", type=int, default=None, help="Override max_tx_per_frame (L) for evaluation.")
+    p.add_argument("--baseline-max-tx", type=int, default=1, help="Max transmissions per frame for baselines (paper-aligned default=1).")
     p.add_argument("--secondary-lbt", action="store_true", help="If L>1, gate secondary picks via listen-before-talk (reduce collisions).")
     p.add_argument("--primary-lbt", action="store_true", help="Apply listen-before-talk contention resolution for primary pick too.")
     p.add_argument("--agent-id-tiebreak-eps", type=float, default=None, help="Override agent-id tiebreak epsilon.")
@@ -278,33 +280,50 @@ def main() -> None:
     random_agent = RandomAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def random_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-        return random_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return random_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
     aloha_agent = AlohaAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)), p_tx=0.2)
 
     def aloha_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-        return aloha_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return aloha_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
     greedy_agent = GreedyColoringAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def greedy_policy(_env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
-        return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(max(1, args.baseline_max_tx)))
 
     tdma_agent = FixedTDMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def tdma_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-        return tdma_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return tdma_agent.select_actions(obs.x, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
     csma_agent = CSMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def csma_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
         # Use env.last_status as ACK feedback.
-        return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(max(1, args.baseline_max_tx)))
 
     satmac_agent = SATMACAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)), p_reselect=1.0)
 
     def satmac_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-        return satmac_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
+        return satmac_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(max(1, args.baseline_max_tx)))
+
+    hsatmac_agent = HSATMACAgent(
+        cfg.num_slots,
+        cfg.num_uavs,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
+        lsg=4,
+        lmin=2,
+        tvalid=4,
+        num_regions=10,
+        cw_min=4,
+        cw_max=64,
+        burst_q_norm=0.6,
+    )
+
+    def hsatmac_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
+        # H-SATMAC uses BS + optional slot-group CSMA, so allow up to 2 transmissions.
+        return hsatmac_agent.select_actions(env=env, obs=obs, rng=rng, max_tx=int(min(2, max(1, getattr(cfg, "max_tx_per_frame", 1)))))
 
     results = []
     results.append(run_policy("GAC-MAC", gac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
@@ -316,6 +335,8 @@ def main() -> None:
     results.append(run_policy("CSMA", csma_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
     satmac_policy.reset = satmac_agent.reset  # type: ignore[attr-defined]
     results.append(run_policy("SATMAC", satmac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
+    hsatmac_policy.reset = hsatmac_agent.reset  # type: ignore[attr-defined]
+    results.append(run_policy("H-SAT", hsatmac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
 
     print("=== Evaluation (mean over episodes) ===")
     for r in results:
