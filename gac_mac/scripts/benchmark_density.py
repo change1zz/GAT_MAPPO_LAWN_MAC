@@ -36,6 +36,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--map-size-m", type=float, default=None, help="Override map size (controls density).")
     p.add_argument("--secondary-lbt", action="store_true", help="Enable secondary-LBT gate (recommended when L>1).")
     p.add_argument("--baseline-max-tx", type=int, default=1, help="Max transmissions per frame for baselines (paper-aligned default=1).")
+    p.add_argument("--gac-neighbor-last-action-mask", action="store_true", help="Enable GAC execution-time neighbor last-action mask.")
+    p.add_argument("--gac-neighbor-last-action-penalty", type=float, default=None, help="Enable GAC execution-time neighbor last-action penalty.")
+    p.add_argument("--gac-agent-id-tiebreak-eps", type=float, default=None, help="Override GAC agent-id tiebreak epsilon at execution.")
+    p.add_argument("--plot-style", type=str, default="facets", choices=["facets", "lines"], help="Plot style for density correlation.")
     p.add_argument("--run-name", type=str, default="density", help="Run name used for output dir.")
     p.add_argument("--results-dir", type=str, default="runs_density", help="Output root dir.")
     p.add_argument("--out", type=str, default=None, help="Optional output png path (overrides run dir).")
@@ -167,7 +171,22 @@ def main() -> None:
         xs_density_km2.append(density_km2)
         xs_n.append(int(n))
 
-        h = agent.initial_hidden(cfg.num_uavs, device)
+        # Build a per-N execution agent to allow override of neighbor constraints without touching training weights.
+        exec_agent = GACMACAgent(
+            input_dim=input_dim,
+            hidden_dim=base_cfg.hidden_dim,
+            action_dim=int(base_cfg.num_slots) * int(getattr(base_cfg, "num_channels", 1)) + 1,
+            gat_heads=base_cfg.gat_heads,
+            use_edge_attr=base_cfg.use_edge_attr,
+            use_agent_id_tiebreak=(base_cfg.obs_version == "v3" and (args.gac_agent_id_tiebreak_eps or getattr(base_cfg, "agent_id_tiebreak_eps", 0.0)) > 0.0),
+            agent_id_tiebreak_eps=float(args.gac_agent_id_tiebreak_eps) if args.gac_agent_id_tiebreak_eps is not None else getattr(base_cfg, "agent_id_tiebreak_eps", 0.0),
+            neighbor_last_action_mask=bool(args.gac_neighbor_last_action_mask),
+            neighbor_last_action_penalty=float(args.gac_neighbor_last_action_penalty) if args.gac_neighbor_last_action_penalty is not None else 0.0,
+        ).to(device)
+        exec_agent.load_state_dict(agent.state_dict())
+        exec_agent.eval()
+
+        h = exec_agent.initial_hidden(cfg.num_uavs, device)
 
         random_agent = RandomAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
         aloha_agent = AlohaAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)), p_tx=0.2)
@@ -190,7 +209,7 @@ def main() -> None:
 
         def _reset_hidden() -> None:
             nonlocal h
-            h = agent.initial_hidden(cfg.num_uavs, device)
+            h = exec_agent.initial_hidden(cfg.num_uavs, device)
 
         def gac_policy(env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
             nonlocal h
@@ -198,7 +217,7 @@ def main() -> None:
             ei = torch.tensor(obs.edge_index, dtype=torch.long, device=device)
             ea = torch.tensor(obs.edge_attr, dtype=torch.float32, device=device)
             with torch.no_grad():
-                act, _logp, _v, _ent, h_out = agent.act(
+                act, _logp, _v, _ent, h_out = exec_agent.act(
                     x,
                     ei,
                     ea,
@@ -301,9 +320,12 @@ def main() -> None:
         )
 
     run_dir = make_run_dir(args.results_dir, args.run_name)
-    out_png = os.path.abspath(args.out) if args.out else os.path.join(run_dir, "density_lines.png")
-    out_json = os.path.splitext(out_png)[0] + ".json"
-    os.makedirs(os.path.dirname(out_png), exist_ok=True)
+    out_base = os.path.abspath(args.out) if args.out else os.path.join(run_dir, "density")
+    # If args.out is a png path, strip extension to form a base path.
+    if out_base.lower().endswith(".png"):
+        out_base = os.path.splitext(out_base)[0]
+    out_json = out_base + ".json"
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump(
             {
@@ -317,10 +339,47 @@ def main() -> None:
             indent=2,
         )
 
-    from gac_mac.viz.plots import plot_density_lines
+    out_files: list[str] = []
+    if args.plot_style == "lines":
+        from gac_mac.viz.plots import plot_density_lines
 
-    plot_density_lines(xs=xs_density_km2, results_by_algo=results_by_algo, save_path=out_png)
-    print(f"saved: {out_png}")
+        out_png = out_base + "_lines.png"
+        plot_density_lines(xs=xs_density_km2, results_by_algo=results_by_algo, save_path=out_png)
+        out_files.append(out_png)
+    else:
+        from gac_mac.viz.plots import plot_density_facets
+
+        plot_density_facets(
+            xs=xs_density_km2,
+            results_by_algo=results_by_algo,
+            metric="sum_rate_mbps",
+            y_label="Throughput (Mbps/frame)",
+            save_path=out_base + "_thr.png",
+            sort_by_last=True,
+        )
+        out_files.append(out_base + "_thr.png")
+        plot_density_facets(
+            xs=xs_density_km2,
+            results_by_algo=results_by_algo,
+            metric="collision_rate",
+            y_label="Collision rate",
+            y_lim=(0.0, 1.0),
+            save_path=out_base + "_coll.png",
+            sort_by_last=False,
+        )
+        out_files.append(out_base + "_coll.png")
+        plot_density_facets(
+            xs=xs_density_km2,
+            results_by_algo=results_by_algo,
+            metric="jain",
+            y_label="Jain",
+            y_lim=(0.0, 1.0),
+            save_path=out_base + "_jain.png",
+            sort_by_last=False,
+        )
+        out_files.append(out_base + "_jain.png")
+    for p in out_files:
+        print(f"saved: {p}")
     print(f"saved: {out_json}")
 
 

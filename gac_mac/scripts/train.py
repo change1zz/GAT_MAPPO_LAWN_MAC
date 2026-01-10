@@ -36,6 +36,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default=None, choices=["auto", "cpu", "cuda"])
     p.add_argument("--results-dir", type=str, default=None)
     p.add_argument("--run-name", type=str, default=None)
+    p.add_argument("--num-uavs", type=int, default=None, help="Override number of UAVs for training env (density).")
+    p.add_argument("--map-size-m", type=float, default=None, help="Override map size in meters for training env (density).")
     p.add_argument("--cs-threshold-dbm", type=float, default=None)
     p.add_argument("--graph-mode", type=str, default=None, choices=["cs", "conflict"])
     p.add_argument("--obs-version", type=str, default=None, choices=["v1", "v2", "v3"])
@@ -129,6 +131,10 @@ def main() -> None:
         cfg = cfg.__class__(**{**asdict(cfg), "results_dir": args.results_dir})
     if args.run_name is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "run_name": args.run_name})
+    if args.num_uavs is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "num_uavs": int(args.num_uavs)})
+    if args.map_size_m is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "map_size_m": float(args.map_size_m)})
     if args.cs_threshold_dbm is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "cs_threshold_dbm": float(args.cs_threshold_dbm)})
     if args.graph_mode is not None:

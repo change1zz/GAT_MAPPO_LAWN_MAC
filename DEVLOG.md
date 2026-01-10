@@ -351,6 +351,28 @@
   - `conda run -n intelligent_AJ python -m gac_mac.scripts.benchmark_density --checkpoint runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth --ns "20,30,40,50,60,80" --episodes 30 --seed 123 --policy argmax --device cuda --baseline-max-tx 1 --run-name mc6L2_paperAlignedBaselines --results-dir runs_density`
   - 图：`runs_density\\mc6L2_paperAlignedBaselines-20260110-171813\\density_lines.png`
   - 数据：`runs_density\\mc6L2_paperAlignedBaselines-20260110-171813\\density_lines.json`
+
+## 2026-01-10 (图表优化：用 facets 避免折线交叉)
+
+- 需求：密度对比图“折线交叉太多”难读。
+- 实现：新增 `plot_density_facets()`（每个算法一个小子图）并在 `benchmark_density.py --plot-style facets` 输出 3 张图（thr/coll/jain），基本不会出现线条交叉干扰阅读。
+  - 代码：`gac_mac/viz/plots.py`, `gac_mac/scripts/benchmark_density.py`
+- 示例输出（paper-aligned baselines + secondary_lbt）：
+  - `runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density_thr.png`
+  - `runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density_coll.png`
+  - `runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density_jain.png`
+  - 数据：`runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density.json`
+
+## 2026-01-10 (高密度碰撞优化：dense-80 微调得到更低 coll)
+
+- 现象：在高密度（N=80）下，collision 明显恶化，根因是 primary 资源仍会被多节点同时选择，secondary_lbt 只能抑制 secondary 冲突。
+- 尝试：用更高密度直接微调策略（训练环境 num_uavs=80，secondary_lbt=ON），保留 best checkpoint 防止后续训练塌缩污染结果：
+  - Train（注意：训练后期会崩，取 best_ckpt）：
+    - `conda run -n intelligent_AJ python -m gac_mac.scripts.train --env lawn --device cuda --results-dir runs_collfocus --run-name mc6L2_dense80_finetune --init-from runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth --num-uavs 80 --num-channels 6 --max-tx-per-frame 2 --secondary-lbt --parallel-env --num-envs 8 --steps-per-update 64 --total-updates 250 --eval-every 25 --eval-episodes 40 --eval-seed 123 --rollout-policy argmax --no-tensorboard --lr 7e-5 --entropy-coef 0.005 --conflict-loss-coef 0.8 --neighbor-last-action-penalty 0.2`
+  - Best ckpt: `runs_collfocus\\mc6L2_dense80_finetune-20260110-173923\\checkpoints\\checkpoint_best_argmax.pth`
+- Dense N=80 评估（argmax, 100 eps, baselines 单次发送对齐）：
+  - `conda run -n intelligent_AJ python -m gac_mac.scripts.evaluate --checkpoint runs_collfocus\\mc6L2_dense80_finetune-20260110-173923\\checkpoints\\checkpoint_best_argmax.pth --episodes 100 --seed 123 --policy argmax --device cuda --num-uavs 80 --secondary-lbt --baseline-max-tx 1`
+  - `GAC-MAC thr 174.281 Mbps | coll 0.260`（相比原 policy 在 N=80 的 coll≈0.291 有下降，但吞吐也略降）
 ## 2026-01-09 (Greedy 模仿学习预训练：C=6,L=2 失败尝试)
 
 - 目的：用 Greedy teacher 先把确定性策略拉到可用区，再用 PPO 微调（避免从随机策略开始的塌缩）。

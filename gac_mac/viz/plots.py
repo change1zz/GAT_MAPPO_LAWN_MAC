@@ -149,3 +149,58 @@ def plot_density_lines(
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
     plt.close()
+
+
+def plot_density_facets(
+    *,
+    xs: list[float],
+    results_by_algo: dict[str, dict[str, list[float]]],
+    metric: str,
+    save_path: str,
+    y_label: str | None = None,
+    y_lim: tuple[float, float] | None = None,
+    sort_by_last: bool = True,
+) -> None:
+    """Facet plot: one small subplot per algorithm (reduces line crossing clutter)."""
+    import math
+
+    import matplotlib.pyplot as plt
+
+    names = list(results_by_algo.keys())
+    if sort_by_last:
+        def _last(name: str) -> float:
+            ys = results_by_algo.get(name, {}).get(metric, [])
+            return float(ys[-1]) if ys else float("-inf")
+
+        names = sorted(names, key=_last, reverse=True)
+
+    n = len(names)
+    if n == 0:
+        return
+    cols = 4
+    rows = int(math.ceil(n / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(4.0 * cols, 2.6 * rows), squeeze=False)
+    for idx, name in enumerate(names):
+        r = idx // cols
+        c = idx % cols
+        ax = axes[r][c]
+        ys = results_by_algo[name].get(metric, [])
+        ax.plot(xs, ys, marker="o", linewidth=2.0, color="steelblue")
+        ax.set_title(name)
+        ax.grid(True, alpha=0.3)
+        ax.set_xlabel("Density (nodes/km^2)")
+        if y_label:
+            ax.set_ylabel(y_label)
+        if y_lim is not None:
+            ax.set_ylim(float(y_lim[0]), float(y_lim[1]))
+
+    # Hide unused axes
+    for j in range(n, rows * cols):
+        r = j // cols
+        c = j % cols
+        axes[r][c].axis("off")
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()
