@@ -19,6 +19,7 @@ class GraphBuilder:
         *,
         num_nodes: int,
         num_slots: int,
+        num_channels: int = 1,
         map_size_m: float,
         height_m: float,
         max_queue_len: int,
@@ -29,6 +30,8 @@ class GraphBuilder:
     ) -> None:
         self.N = int(num_nodes)
         self.K = int(num_slots)
+        self.C = int(max(1, num_channels))
+        self.A = int(self.C * self.K + 1)  # flattened (ch,slot) + NoTx
         self.map_size_m = float(map_size_m)
         self.height_m = float(height_m)
         self.max_queue_len = int(max_queue_len)
@@ -43,7 +46,7 @@ class GraphBuilder:
         positions_m: np.ndarray,  # (N,3)
         queues: np.ndarray,  # (N,)
         energy_norm: np.ndarray | None,  # (N,) or None
-        last_actions: np.ndarray,  # (N,) in [0..K] (K=no-tx)
+        last_actions: np.ndarray,  # (N,) action index OR (N,A) multi-hot
         last_status: np.ndarray,  # (N,) 0/1/2 success/collision/idle
         rx_power_dbm: np.ndarray,  # (N,N) power at "effective dst" from src (see below)
     ) -> GraphObs:
@@ -104,7 +107,13 @@ class GraphBuilder:
             idx = (np.arange(self.N, dtype=np.float32) / max(1.0, float(self.N))).reshape(self.N, 1)
             extra.append(idx.astype(np.float32))
 
-        last_act_oh = np.eye(self.K + 1, dtype=np.float32)[np.asarray(last_actions, dtype=np.int64)]
+        last_actions = np.asarray(last_actions)
+        if last_actions.ndim == 2:
+            if last_actions.shape != (self.N, self.A):
+                raise ValueError(f"last_actions must have shape (N,A)=({self.N},{self.A}), got {last_actions.shape}")
+            last_act_oh = last_actions.astype(np.float32)
+        else:
+            last_act_oh = np.eye(self.A, dtype=np.float32)[last_actions.astype(np.int64).reshape(self.N)]
         last_status_oh = np.eye(3, dtype=np.float32)[np.asarray(last_status, dtype=np.int64)]
 
         # Degree uses in-degree: how many potential interferers the node can sense.

@@ -4,10 +4,12 @@ import numpy as np
 
 
 class GreedyColoringAgent:
-    def __init__(self, num_slots: int) -> None:
+    def __init__(self, num_slots: int, *, num_channels: int = 1) -> None:
         self.K = int(num_slots)
+        self.C = int(max(1, num_channels))
+        self.A = int(self.C * self.K + 1)  # flattened (ch,slot) + NoTx
 
-    def select_actions(self, *, env, obs_x: np.ndarray) -> np.ndarray:
+    def select_actions(self, *, env, obs_x: np.ndarray, max_tx: int = 1) -> np.ndarray:
         n = int(obs_x.shape[0])
         q_norm = obs_x[:, 3]
         active = q_norm > 0.0
@@ -32,24 +34,39 @@ class GreedyColoringAgent:
         degrees = conflict.sum(axis=1)
         order = np.argsort(-degrees)  # high degree first
 
-        actions = np.full((n,), fill_value=self.K, dtype=np.int64)
-        for i in order:
-            i = int(i)
-            if not active[i]:
-                continue
-            # +1 to tolerate any accidental No-Tx (==K) bookkeeping without crashing.
-            used = np.zeros((self.K + 1,), dtype=np.bool_)
-            neigh = np.where(conflict[i])[0]
-            for j in neigh:
-                j = int(j)
-                a = int(actions[j])
-                if 0 <= a <= self.K:
-                    used[a] = True
-            # pick smallest available slot
-            chosen = None
-            for s in range(self.K):
-                if not bool(used[s]):
+        num_tx = self.A - 1
+        l = int(max(1, max_tx))
+        no_tx = self.A - 1
+
+        # Multi-allocation heuristic: repeat coloring rounds, each node can grab up to L resources.
+        alloc = np.full((n, l), fill_value=no_tx, dtype=np.int64)
+        alloc_count = np.zeros((n,), dtype=np.int32)
+        used_by_node: list[set[int]] = [set() for _ in range(n)]
+
+        for _round in range(l):
+            for i0 in order:
+                i = int(i0)
+                if not active[i]:
+                    continue
+                if alloc_count[i] >= l:
+                    continue
+
+                neigh = np.where(conflict[i])[0]
+                forbidden: set[int] = set()
+                for j0 in neigh:
+                    j = int(j0)
+                    forbidden |= used_by_node[j]
+
+                chosen = None
+                for s in range(num_tx):
+                    if s in forbidden or s in used_by_node[i]:
+                        continue
                     chosen = s
                     break
-            actions[i] = self.K if chosen is None else int(chosen)
-        return actions
+                if chosen is None:
+                    continue
+                used_by_node[i].add(int(chosen))
+                alloc[i, alloc_count[i]] = int(chosen)
+                alloc_count[i] += 1
+
+        return alloc[:, 0] if l == 1 else alloc

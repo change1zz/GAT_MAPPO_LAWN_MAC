@@ -48,6 +48,7 @@ def make_env(cfg: Config) -> LAWNEnv:
     return LAWNEnv(
         num_uavs=cfg.num_uavs,
         num_slots=cfg.num_slots,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
         map_size_m=cfg.map_size_m,
         height_m=cfg.height_m,
         max_queue_len=cfg.max_queue_len,
@@ -91,7 +92,7 @@ def main() -> None:
     agent = GACMACAgent(
         input_dim=input_dim,
         hidden_dim=cfg.hidden_dim,
-        action_dim=cfg.num_slots + 1,
+        action_dim=int(cfg.num_slots) * int(getattr(cfg, "num_channels", 1)) + 1,
         gat_heads=cfg.gat_heads,
         use_edge_attr=cfg.use_edge_attr,
     ).to(device)
@@ -104,29 +105,36 @@ def main() -> None:
 
     snapshot_obs = obs
     snapshot_positions = env.positions_m.copy()
-    snapshot_actions = np.full((cfg.num_uavs,), fill_value=cfg.num_slots, dtype=np.int64)
+    no_tx = int(cfg.num_slots) * int(getattr(cfg, "num_channels", 1))
+    snapshot_actions = np.full((cfg.num_uavs,), fill_value=no_tx, dtype=np.int64)
 
     for t in range(cfg.episode_len):
         x = torch.tensor(obs.x, dtype=torch.float32, device=device)
         ei = torch.tensor(obs.edge_index, dtype=torch.long, device=device)
         ea = torch.tensor(obs.edge_attr, dtype=torch.float32, device=device)
         with torch.no_grad():
-            h = agent.encoder(x, ei, ea, h)
-            logits = agent.actor(h)
-            if args.policy == "sample":
-                temp = float(max(1e-6, args.temperature))
-                dist = torch.distributions.Categorical(logits=logits / temp)
-                actions = dist.sample().cpu().numpy()
-            else:
+            if args.policy == "grouped":
+                h = agent.encoder(x, ei, ea, h)
+                logits = agent.actor(h)
                 probs = torch.softmax(logits, dim=-1)
-                if args.policy == "argmax":
-                    actions = torch.argmax(probs, dim=-1).cpu().numpy()
-                else:
-                    p_no = probs[:, cfg.num_slots]
-                    p_tx = probs[:, : cfg.num_slots].sum(dim=-1)
-                    best_slot = torch.argmax(probs[:, : cfg.num_slots], dim=-1)
-                    act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
-                    actions = act.cpu().numpy()
+                p_no = probs[:, no_tx]
+                p_tx = probs[:, :no_tx].sum(dim=-1)
+                best_tx = torch.argmax(probs[:, :no_tx], dim=-1)
+                act0 = torch.where(p_tx > p_no, best_tx, torch.full_like(best_tx, no_tx))
+                act_env = act0.view(-1, 1)
+                actions = act0.cpu().numpy()
+            else:
+                act_t, _logp, _v, _ent, h = agent.act(
+                    x,
+                    ei,
+                    ea,
+                    h,
+                    deterministic=(args.policy == "argmax"),
+                    temperature=float(args.temperature),
+                    max_tx=int(getattr(cfg, "max_tx_per_frame", 1)),
+                )
+                act_env = act_t
+                actions = act_t[:, 0].cpu().numpy()
 
         if t == args.step:
             snapshot_obs = obs
@@ -134,7 +142,7 @@ def main() -> None:
             snapshot_actions = actions.copy()
             break
 
-        obs, _r, done, _info = env.step(actions)
+        obs, _r, done, _info = env.step(act_env.cpu().numpy())
         if done:
             break
 
@@ -147,6 +155,7 @@ def main() -> None:
         edge_index=snapshot_obs.edge_index,
         actions=snapshot_actions,
         num_slots=cfg.num_slots,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
         save_path=args.out,
         title=f"Topology Snapshot (t={args.step})",
     )

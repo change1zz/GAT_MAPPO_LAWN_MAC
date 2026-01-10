@@ -9,6 +9,7 @@ __pycache__/
 results/
 backup/
 tmp_papers/
+runs_*/
 
 # TensorBoard
 **/tb/
@@ -23,4 +24,3 @@ tmp_papers/
 
 # Papers (keep filenames locally, avoid huge binaries in git)
 baseline_paper/*.pdf
-

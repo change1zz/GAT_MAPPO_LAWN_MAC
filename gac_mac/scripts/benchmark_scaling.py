@@ -60,6 +60,7 @@ def make_env(cfg: Config) -> LAWNEnv:
     return LAWNEnv(
         num_uavs=cfg.num_uavs,
         num_slots=cfg.num_slots,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
         map_size_m=cfg.map_size_m,
         height_m=cfg.height_m,
         max_queue_len=cfg.max_queue_len,
@@ -129,7 +130,7 @@ def main() -> None:
     agent = GACMACAgent(
         input_dim=input_dim,
         hidden_dim=base_cfg.hidden_dim,
-        action_dim=base_cfg.num_slots + 1,
+        action_dim=int(base_cfg.num_slots) * int(getattr(base_cfg, "num_channels", 1)) + 1,
         gat_heads=base_cfg.gat_heads,
         use_edge_attr=base_cfg.use_edge_attr,
         use_agent_id_tiebreak=(base_cfg.obs_version == "v3" and getattr(base_cfg, "agent_id_tiebreak_eps", 0.0) > 0.0),
@@ -145,7 +146,7 @@ def main() -> None:
         "Greedy": {"sum_rate": [], "collision_rate": [], "avg_delay": []},
     }
 
-    greedy = GreedyColoringAgent(base_cfg.num_slots)
+    greedy = GreedyColoringAgent(base_cfg.num_slots, num_channels=int(getattr(base_cfg, "num_channels", 1)))
 
     for n in ns:
         cfg = base_cfg.__class__(**{**asdict(base_cfg), "num_uavs": int(n)})
@@ -159,13 +160,15 @@ def main() -> None:
                 gac_policy.h = agent.initial_hidden(cfg.num_uavs, device)
             h_in = gac_policy.h
             with torch.no_grad():
-                logits, h_out = agent.forward_logits(x, ei, ea, h_in)
-                if args.policy == "sample":
-                    temp = float(max(1e-6, args.temperature))
-                    dist = torch.distributions.Categorical(logits=logits / temp)
-                    act = dist.sample()
-                else:
-                    act = torch.argmax(logits, dim=-1)
+                act, _logp, _v, _ent, h_out = agent.act(
+                    x,
+                    ei,
+                    ea,
+                    h_in,
+                    deterministic=(args.policy == "argmax"),
+                    temperature=float(args.temperature),
+                    max_tx=int(getattr(cfg, "max_tx_per_frame", 1)),
+                )
             gac_policy.h = h_out.detach()
             return act.cpu().numpy()
 
@@ -175,7 +178,7 @@ def main() -> None:
         gac_policy.reset = _gac_reset  # type: ignore[attr-defined]
 
         def greedy_policy(_env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
-            return greedy.select_actions(env=_env, obs_x=obs.x)
+            return greedy.select_actions(env=_env, obs_x=obs.x, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
         rates = []
         colls = []

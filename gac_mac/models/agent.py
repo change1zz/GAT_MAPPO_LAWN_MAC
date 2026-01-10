@@ -32,6 +32,7 @@ class GACMACAgent(nn.Module):
         agent_id_tiebreak_eps: float = 0.0,
         neighbor_last_action_mask: bool = False,
         neighbor_last_action_penalty: float = 0.0,
+        critic_detach_encoder: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_dim = int(hidden_dim)
@@ -40,6 +41,7 @@ class GACMACAgent(nn.Module):
         self.agent_id_tiebreak_eps = float(agent_id_tiebreak_eps)
         self.neighbor_last_action_mask = bool(neighbor_last_action_mask)
         self.neighbor_last_action_penalty = float(neighbor_last_action_penalty)
+        self.critic_detach_encoder = bool(critic_detach_encoder)
 
         edge_dim = 1 if use_edge_attr else None
         self.encoder = STGNNEncoder(input_dim=input_dim, hidden_dim=hidden_dim, heads=gat_heads, edge_dim=edge_dim)
@@ -86,7 +88,9 @@ class GACMACAgent(nn.Module):
         bias[torch.arange(logits.size(0), device=logits.device), pref] = eps
         return logits + bias
 
-    def _apply_neighbor_last_action_constraints(self, logits: torch.Tensor, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    def _apply_neighbor_last_action_constraints(
+        self, logits: torch.Tensor, x: torch.Tensor, edge_index: torch.Tensor
+    ) -> torch.Tensor:
         if (not self.neighbor_last_action_mask) and self.neighbor_last_action_penalty <= 0.0:
             return logits
         if edge_index.numel() == 0:
@@ -94,26 +98,23 @@ class GACMACAgent(nn.Module):
         a = int(logits.size(-1))
         if a < 2:
             return logits
-        # x layout ends with: last_act_oh (A), last_status_oh (3), in_deg_norm (1)
+        # x layout ends with: last_act (A) (one-hot or multi-hot), last_status_oh (3), in_deg_norm (1)
         f = int(x.size(-1))
         last_act_start = f - (a + 3 + 1)
         if last_act_start < 0:
             return logits
-        last_act_oh = x[:, last_act_start : last_act_start + a]
-        if last_act_oh.numel() == 0:
+        last_act_mh = x[:, last_act_start : last_act_start + a]
+        if last_act_mh.numel() == 0:
             return logits
-        last_act = torch.argmax(last_act_oh, dim=-1)  # (N,)
-
-        k = a - 1  # slots
+        k = a - 1  # tx resources (exclude NoTx)
         src = edge_index[0].long()
         dst = edge_index[1].long()
-        last_src = last_act[src]
-        valid = (last_src >= 0) & (last_src < k)
-        if not bool(valid.any().item()):
+        used_src = (last_act_mh[src, :k] > 0.5).to(dtype=torch.float32)  # (E, k)
+        if used_src.numel() == 0:
             return logits
-
-        forbidden = torch.zeros((x.size(0), k), dtype=torch.bool, device=logits.device)
-        forbidden[dst[valid], last_src[valid]] = True
+        accum = torch.zeros((x.size(0), k), dtype=torch.float32, device=logits.device)
+        accum.index_add_(0, dst, used_src)
+        forbidden = accum > 0.0
 
         out = logits
         if self.neighbor_last_action_penalty > 0.0:
@@ -123,6 +124,56 @@ class GACMACAgent(nn.Module):
             out = out.clone()
             out[:, :k] = out[:, :k].masked_fill(forbidden, -1e9)
         return out
+
+    def _select_multi_actions(
+        self,
+        logits: torch.Tensor,
+        *,
+        max_tx: int,
+        deterministic: bool,
+        temperature: float,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Select up to max_tx resources via sequential masked sampling.
+
+        Returns:
+            actions: (N, max_tx) with NoTx padded at the end
+            logp_sum: (N,)
+            entropy_sum: (N,)
+        """
+        n = int(logits.size(0))
+        a = int(logits.size(-1))
+        no_tx = a - 1
+        l = int(max(1, max_tx))
+        temp = float(max(1e-6, temperature))
+
+        masked = logits.clone()
+        actions = torch.full((n, l), no_tx, dtype=torch.long, device=logits.device)
+        logp_sum = torch.zeros((n,), dtype=logits.dtype, device=logits.device)
+        entropy_sum = torch.zeros((n,), dtype=logits.dtype, device=logits.device)
+        ended = torch.zeros((n,), dtype=torch.bool, device=logits.device)
+
+        for t in range(l):
+            active = ~ended
+            if not bool(active.any().item()):
+                break
+            idx = torch.nonzero(active, as_tuple=False).view(-1)
+            dist = Categorical(logits=masked[idx] / temp)
+            sel = torch.argmax(masked[idx], dim=-1) if deterministic else dist.sample()
+            actions[idx, t] = sel
+            logp_sum[idx] = logp_sum[idx] + dist.log_prob(sel)
+            entropy_sum[idx] = entropy_sum[idx] + dist.entropy()
+
+            stop = sel == no_tx
+            if bool(stop.any().item()):
+                ended[idx[stop]] = True
+
+            not_stop = ~stop
+            if bool(not_stop.any().item()):
+                idx2 = idx[not_stop]
+                sel2 = sel[not_stop]
+                masked[idx2, sel2] = -1e9
+
+        return actions, logp_sum, entropy_sum
 
     def forward_logits(
         self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, h_in: torch.Tensor
@@ -145,16 +196,15 @@ class GACMACAgent(nn.Module):
         *,
         deterministic: bool = False,
         temperature: float = 1.0,
+        max_tx: int = 1,
     ) -> tuple[
         torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
     ]:
         """Sample actions for rollout (no gradients expected)."""
         logits, h_out = self.forward_logits(x, edge_index, edge_attr, h_in)
-        temp = float(max(1e-6, temperature))
-        dist = Categorical(logits=logits / temp)
-        action = torch.argmax(logits, dim=-1) if deterministic else dist.sample()
-        logp = dist.log_prob(action)
-        entropy = dist.entropy()
+        action, logp, entropy = self._select_multi_actions(
+            logits, max_tx=int(max_tx), deterministic=bool(deterministic), temperature=float(temperature)
+        )
         values = self._values_from_hidden(h_out, batch=None)
         return action, logp, values, entropy, h_out
 
@@ -167,9 +217,38 @@ class GACMACAgent(nn.Module):
         actions: torch.Tensor,
     ) -> StepOutputs:
         logits, h_out = self.forward_logits(x, edge_index, edge_attr, h_in)
-        dist = Categorical(logits=logits)
-        action_logp = dist.log_prob(actions)
-        entropy = dist.entropy()
+        if actions.dim() == 1:
+            actions = actions.view(-1, 1)
+        n = int(logits.size(0))
+        a = int(logits.size(-1))
+        no_tx = a - 1
+        l = int(actions.size(1))
+
+        masked = logits.clone()
+        action_logp = torch.zeros((n,), dtype=logits.dtype, device=logits.device)
+        entropy = torch.zeros((n,), dtype=logits.dtype, device=logits.device)
+        ended = torch.zeros((n,), dtype=torch.bool, device=logits.device)
+
+        for t in range(l):
+            active = ~ended
+            if not bool(active.any().item()):
+                break
+            idx = torch.nonzero(active, as_tuple=False).view(-1)
+            dist = Categorical(logits=masked[idx])
+            sel = actions[idx, t]
+            action_logp[idx] = action_logp[idx] + dist.log_prob(sel)
+            entropy[idx] = entropy[idx] + dist.entropy()
+
+            stop = sel == no_tx
+            if bool(stop.any().item()):
+                ended[idx[stop]] = True
+
+            not_stop = ~stop
+            if bool(not_stop.any().item()):
+                idx2 = idx[not_stop]
+                sel2 = sel[not_stop]
+                masked[idx2, sel2] = -1e9
+
         values = self._values_from_hidden(h_out, batch=None)
         return StepOutputs(action_logp=action_logp, values=values, entropy=entropy, logits=logits, h_out=h_out)
 
@@ -183,7 +262,8 @@ class GACMACAgent(nn.Module):
     def _values_from_hidden(self, h: torch.Tensor, batch: torch.Tensor | None) -> torch.Tensor:
         if batch is None:
             batch = torch.zeros((h.size(0),), dtype=torch.long, device=h.device)
-        global_feat = self.global_pool(h, index=batch)  # (B, H)
+        h_v = h.detach() if self.critic_detach_encoder else h
+        global_feat = self.global_pool(h_v, index=batch)  # (B, H)
         global_per_node = global_feat[batch]  # (N, H)
-        v = self.value_head(torch.cat([h, global_per_node], dim=-1)).squeeze(-1)  # (N,)
+        v = self.value_head(torch.cat([h_v, global_per_node], dim=-1)).squeeze(-1)  # (N,)
         return v

@@ -24,6 +24,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     p.add_argument("--cs-threshold-dbm", type=float, default=None, help="Override cs_threshold for evaluation env.")
+    p.add_argument("--num-uavs", type=int, default=None, help="Override number of UAVs (density).")
+    p.add_argument("--map-size-m", type=float, default=None, help="Override map size in meters (density).")
+    p.add_argument("--num-channels", type=int, default=None, help="Override num_channels (C) for evaluation env.")
+    p.add_argument("--max-tx-per-frame", type=int, default=None, help="Override max_tx_per_frame (L) for evaluation.")
+    p.add_argument("--secondary-lbt", action="store_true", help="If L>1, gate secondary picks via listen-before-talk (reduce collisions).")
+    p.add_argument("--primary-lbt", action="store_true", help="Apply listen-before-talk contention resolution for primary pick too.")
+    p.add_argument("--agent-id-tiebreak-eps", type=float, default=None, help="Override agent-id tiebreak epsilon.")
+    p.add_argument("--neighbor-last-action-mask", action="store_true", help="Mask resources used by in-neighbors in last frame.")
+    p.add_argument("--neighbor-last-action-penalty", type=float, default=None, help="Logit penalty for resources used by in-neighbors in last frame.")
     p.add_argument(
         "--policy",
         type=str,
@@ -76,6 +85,9 @@ def make_env(cfg: Config) -> LAWNEnv:
     return LAWNEnv(
         num_uavs=cfg.num_uavs,
         num_slots=cfg.num_slots,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
+        secondary_lbt=bool(getattr(cfg, "secondary_lbt", False)),
+        primary_lbt=bool(getattr(cfg, "primary_lbt", False)),
         map_size_m=cfg.map_size_m,
         height_m=cfg.height_m,
         max_queue_len=cfg.max_queue_len,
@@ -107,6 +119,11 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
     ep_jains = []
     ep_colls = []
     ep_delays = []
+    ep_attempts = []
+    ep_success = []
+    ep_collisions = []
+    ep_max_group = []
+    ep_multi_res = []
 
     for ep in range(episodes):
         seed = int(base_seed + ep)
@@ -118,6 +135,11 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
         jain_sum = 0.0
         coll_sum = 0.0
         delay_sum = 0.0
+        attempts_sum = 0.0
+        success_sum = 0.0
+        collisions_sum = 0.0
+        max_group_sum = 0.0
+        multi_res_sum = 0.0
 
         for _t in range(cfg.episode_len):
             actions = policy_fn(env, obs, rng)
@@ -126,6 +148,11 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
             jain_sum += float(info.get("jain", 0.0))
             coll_sum += float(info["collision_rate"])
             delay_sum += float(info["avg_delay"])
+            attempts_sum += float(info.get("tx_attempts", 0.0))
+            success_sum += float(info.get("tx_success", 0.0))
+            collisions_sum += float(info.get("tx_collision", 0.0))
+            max_group_sum += float(info.get("max_group_size", 0.0))
+            multi_res_sum += float(info.get("num_multi_tx_resources", 0.0))
             if done:
                 break
 
@@ -133,6 +160,11 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
         ep_jains.append(jain_sum / cfg.episode_len)
         ep_colls.append(coll_sum / cfg.episode_len)
         ep_delays.append(delay_sum / cfg.episode_len)
+        ep_attempts.append(attempts_sum / cfg.episode_len)
+        ep_success.append(success_sum / cfg.episode_len)
+        ep_collisions.append(collisions_sum / cfg.episode_len)
+        ep_max_group.append(max_group_sum / cfg.episode_len)
+        ep_multi_res.append(multi_res_sum / cfg.episode_len)
 
     return {
         "name": name,
@@ -140,6 +172,11 @@ def run_policy(name: str, policy_fn, *, cfg: Config, base_seed: int, episodes: i
         "jain": float(np.mean(ep_jains)),
         "collision_rate": float(np.mean(ep_colls)),
         "avg_delay": float(np.mean(ep_delays)),
+        "tx_attempts": float(np.mean(ep_attempts)),
+        "tx_success": float(np.mean(ep_success)),
+        "tx_collision": float(np.mean(ep_collisions)),
+        "max_group_size": float(np.mean(ep_max_group)),
+        "num_multi_tx_resources": float(np.mean(ep_multi_res)),
     }
 
 
@@ -155,6 +192,24 @@ def main() -> None:
     cfg = Config(**cfg_dict)
     if args.cs_threshold_dbm is not None:
         cfg = cfg.__class__(**{**asdict(cfg), "cs_threshold_dbm": float(args.cs_threshold_dbm)})
+    if args.num_uavs is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "num_uavs": int(args.num_uavs)})
+    if args.map_size_m is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "map_size_m": float(args.map_size_m)})
+    if args.num_channels is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "num_channels": int(args.num_channels)})
+    if args.max_tx_per_frame is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "max_tx_per_frame": int(args.max_tx_per_frame)})
+    if args.secondary_lbt:
+        cfg = cfg.__class__(**{**asdict(cfg), "secondary_lbt": True})
+    if args.primary_lbt:
+        cfg = cfg.__class__(**{**asdict(cfg), "primary_lbt": True})
+    if args.agent_id_tiebreak_eps is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "agent_id_tiebreak_eps": float(args.agent_id_tiebreak_eps)})
+    if args.neighbor_last_action_mask:
+        cfg = cfg.__class__(**{**asdict(cfg), "neighbor_last_action_mask": True})
+    if args.neighbor_last_action_penalty is not None:
+        cfg = cfg.__class__(**{**asdict(cfg), "neighbor_last_action_penalty": float(args.neighbor_last_action_penalty)})
 
     device = _resolve_device(args.device)
     env_for_shape = make_env(cfg)
@@ -166,7 +221,7 @@ def main() -> None:
     agent = GACMACAgent(
         input_dim=input_dim,
         hidden_dim=cfg.hidden_dim,
-        action_dim=cfg.num_slots + 1,
+        action_dim=int(cfg.num_slots) * int(getattr(cfg, "num_channels", 1)) + 1,
         gat_heads=cfg.gat_heads,
         use_edge_attr=cfg.use_edge_attr,
         use_agent_id_tiebreak=(cfg.obs_version == "v3" and getattr(cfg, "agent_id_tiebreak_eps", 0.0) > 0.0),
@@ -188,21 +243,27 @@ def main() -> None:
             gac_policy.h = agent.initial_hidden(cfg.num_uavs, device)
         h_in = gac_policy.h
         with torch.no_grad():
-            logits, h_out = agent.forward_logits(x, ei, ea, h_in)
-            if args.policy == "sample":
-                temp = float(max(1e-6, args.temperature))
-                dist = torch.distributions.Categorical(logits=logits / temp)
-                act = dist.sample()
-            else:
+            max_tx = int(getattr(cfg, "max_tx_per_frame", 1))
+            if args.policy == "grouped":
+                logits, h_out = agent.forward_logits(x, ei, ea, h_in)
                 probs = torch.softmax(logits, dim=-1)
-                if args.policy == "argmax":
-                    act = torch.argmax(probs, dim=-1)
-                else:
-                    # grouped: compare transmit mass vs no-tx
-                    p_no = probs[:, cfg.num_slots]
-                    p_tx = probs[:, : cfg.num_slots].sum(dim=-1)
-                    best_slot = torch.argmax(probs[:, : cfg.num_slots], dim=-1)
-                    act = torch.where(p_tx > p_no, best_slot, torch.full_like(best_slot, cfg.num_slots))
+                no_tx = int(cfg.num_slots) * int(getattr(cfg, "num_channels", 1))
+                p_no = probs[:, no_tx]
+                p_tx = probs[:, :no_tx].sum(dim=-1)
+                best_tx = torch.argmax(probs[:, :no_tx], dim=-1)
+                first = torch.where(p_tx > p_no, best_tx, torch.full_like(best_tx, no_tx))
+                act = torch.full((cfg.num_uavs, max_tx), no_tx, dtype=torch.long, device=device)
+                act[:, 0] = first
+            else:
+                act, _logp, _v, _ent, h_out = agent.act(
+                    x,
+                    ei,
+                    ea,
+                    h_in,
+                    deterministic=(args.policy == "argmax"),
+                    temperature=float(args.temperature),
+                    max_tx=max_tx,
+                )
         gac_policy.h = h_out.detach()
         return act.cpu().numpy()
 
@@ -211,21 +272,21 @@ def main() -> None:
 
     gac_policy.reset = _gac_reset  # type: ignore[attr-defined]
 
-    random_agent = RandomAgent(cfg.num_slots)
+    random_agent = RandomAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def random_policy(_env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
-        return random_agent.select_actions(obs.x, rng)
+        return random_agent.select_actions(obs.x, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
-    greedy_agent = GreedyColoringAgent(cfg.num_slots)
+    greedy_agent = GreedyColoringAgent(cfg.num_slots, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def greedy_policy(_env: LAWNEnv, obs, _rng: np.random.Generator) -> np.ndarray:
-        return greedy_agent.select_actions(env=_env, obs_x=obs.x)
+        return greedy_agent.select_actions(env=_env, obs_x=obs.x, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
-    csma_agent = CSMAAgent(cfg.num_slots, cfg.num_uavs)
+    csma_agent = CSMAAgent(cfg.num_slots, cfg.num_uavs, num_channels=int(getattr(cfg, "num_channels", 1)))
 
     def csma_policy(env: LAWNEnv, obs, rng: np.random.Generator) -> np.ndarray:
         # Use env.last_status as ACK feedback.
-        return csma_agent.select_actions(obs.x, env.last_status, rng)
+        return csma_agent.select_actions(obs.x, env.last_status, rng, max_tx=int(getattr(cfg, "max_tx_per_frame", 1)))
 
     results = []
     results.append(run_policy("GAC-MAC", gac_policy, cfg=cfg, base_seed=args.seed, episodes=args.episodes))
@@ -237,7 +298,9 @@ def main() -> None:
     print("=== Evaluation (mean over episodes) ===")
     for r in results:
         print(
-            f"{r['name']:7s} | thr {r['sum_rate_mbps']:.3f} Mbps | jain {r['jain']:.3f} | coll {r['collision_rate']:.3f} | delay {r['avg_delay']:.3f}"
+            f"{r['name']:7s} | thr {r['sum_rate_mbps']:.3f} Mbps | jain {r['jain']:.3f} | coll {r['collision_rate']:.3f} | "
+            f"attempt {r['tx_attempts']:.2f}/step | succ {r['tx_success']:.2f}/step | coll_ct {r['tx_collision']:.2f}/step | "
+            f"max_grp {r['max_group_size']:.2f} | multi_res {r['num_multi_tx_resources']:.2f}/step | delay {r['avg_delay']:.3f}"
         )
 
     if args.out:

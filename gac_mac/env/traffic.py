@@ -57,19 +57,23 @@ class PoissonTraffic:
 
         return TrafficStepInfo(arrivals=arrivals, accepted=accepted, dropped=dropped)
 
-    def serve_successes(self, *, success_mask: np.ndarray, t: int) -> list[int]:
-        """Serve at most 1 packet per successful transmission, return list of delays."""
+    def serve_successes(self, *, success_counts: np.ndarray, t: int) -> list[int]:
+        """Serve up to success_counts[i] packets per node, return list of delays for served packets."""
         delays: list[int] = []
-        idxs = np.where(success_mask)[0]
+        success_counts = np.asarray(success_counts, dtype=np.int32).reshape(self.N)
+        idxs = np.where(success_counts > 0)[0]
         for i in idxs:
-            if self.queues[i] <= 0:
+            n = int(success_counts[i])
+            if n <= 0:
                 continue
-            if not self._arrival_times[i]:
-                # Shouldn't happen, but keep robust.
+            n = min(n, int(self.queues[i]))
+            for _ in range(n):
+                if not self._arrival_times[i]:
+                    # Shouldn't happen, but keep robust.
+                    self.queues[i] -= 1
+                    continue
+                arrival_t = self._arrival_times[i].popleft()
+                delays.append(int(t - arrival_t))
                 self.queues[i] -= 1
-                continue
-            arrival_t = self._arrival_times[i].popleft()
-            delays.append(int(t - arrival_t))
-            self.queues[i] -= 1
         return delays
 

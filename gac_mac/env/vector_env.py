@@ -52,6 +52,9 @@ def make_env_from_config(cfg: Config, *, env: Literal["toy", "lawn"]) -> Any:
     return LAWNEnv(
         num_uavs=cfg.num_uavs,
         num_slots=cfg.num_slots,
+        num_channels=int(getattr(cfg, "num_channels", 1)),
+        secondary_lbt=bool(getattr(cfg, "secondary_lbt", False)),
+        primary_lbt=bool(getattr(cfg, "primary_lbt", False)),
         map_size_m=cfg.map_size_m,
         height_m=cfg.height_m,
         max_queue_len=cfg.max_queue_len,

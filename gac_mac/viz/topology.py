@@ -9,6 +9,7 @@ def plot_topology_snapshot(
     edge_index: np.ndarray,  # (2,E)
     actions: np.ndarray,  # (N,)
     num_slots: int,
+    num_channels: int = 1,
     save_path: str,
     title: str | None = None,
 ) -> None:
@@ -32,12 +33,16 @@ def plot_topology_snapshot(
     pos_dict = nx.get_node_attributes(G, "pos")
 
     cmap = plt.get_cmap("tab10")
+    c = int(max(1, num_channels))
+    no_tx = int(c * int(num_slots))
     colors = []
     for a in actions.astype(int):
-        if a == num_slots:
+        if a == no_tx:
             colors.append("lightgray")
         else:
-            colors.append(cmap(a % 10))
+            # Color by slot index, ignore channel for readability.
+            slot = int(a % int(num_slots)) if num_slots > 0 else 0
+            colors.append(cmap(slot % 10))
 
     plt.figure(figsize=(10, 10))
     nx.draw(

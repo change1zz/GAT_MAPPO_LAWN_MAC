@@ -111,3 +111,41 @@ def plot_scaling_lines(
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
     plt.close()
+
+
+def plot_density_lines(
+    *,
+    xs: list[float],
+    results_by_algo: dict[str, dict[str, list[float]]],
+    save_path: str,
+) -> None:
+    import matplotlib.pyplot as plt
+
+    fig = plt.figure(figsize=(14, 4))
+    ax1 = fig.add_subplot(1, 3, 1)
+    ax2 = fig.add_subplot(1, 3, 2)
+    ax3 = fig.add_subplot(1, 3, 3)
+
+    for name, metrics in results_by_algo.items():
+        ax1.plot(xs, metrics.get("sum_rate_mbps", []), marker="o", label=name)
+        ax2.plot(xs, metrics.get("collision_rate", []), marker="o", label=name)
+        ax3.plot(xs, metrics.get("jain", []), marker="o", label=name)
+
+    ax1.set_title("Throughput vs Density")
+    ax1.set_xlabel("Density (nodes/km^2)")
+    ax1.grid(True, alpha=0.3)
+
+    ax2.set_title("Collision vs Density")
+    ax2.set_xlabel("Density (nodes/km^2)")
+    ax2.set_ylim(0.0, 1.0)
+    ax2.grid(True, alpha=0.3)
+
+    ax3.set_title("Jain vs Density")
+    ax3.set_xlabel("Density (nodes/km^2)")
+    ax3.set_ylim(0.0, 1.0)
+    ax3.grid(True, alpha=0.3)
+
+    ax1.legend(loc="best")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=150)
+    plt.close()

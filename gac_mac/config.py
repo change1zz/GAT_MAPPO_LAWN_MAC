@@ -18,6 +18,10 @@ class Config:
     # --- Environment (toy in M1; real in later milestones) ---
     num_uavs: int = 30
     num_slots: int = 8
+    num_channels: int = 1  # orthogonal channels; total actions = num_channels*num_slots + NoTx
+    max_tx_per_frame: int = 1  # allow each node to pick up to L resources per frame (1 keeps legacy behavior)
+    secondary_lbt: bool = False  # if L>1, apply listen-before-talk gate for secondary picks (reduces collisions)
+    primary_lbt: bool = False  # apply LBT contention resolution for primary pick too (reduces collisions)
     map_size_m: float = 1000.0
     height_m: float = 200.0
     neighbor_radius_m: float = 250.0  # used by toy env to build a directed graph
@@ -58,7 +62,7 @@ class Config:
     mobility_dt_s: float = 0.2
 
     # Reward shaping
-    reward_mode: str = "binary"  # "binary" | "rate" (use log2(1+SINR) on success)
+    reward_mode: str = "binary"  # "binary" | "rate" (sum log2(1+SINR)) | "mbps" (throughput-aligned)
     reward_success: float = 1.0
     reward_collision: float = -2.0
     reward_idle_empty: float = 0.1
@@ -71,15 +75,20 @@ class Config:
     agent_id_tiebreak_eps: float = 0.0
     neighbor_last_action_mask: bool = False
     neighbor_last_action_penalty: float = 0.0
+    critic_detach_encoder: bool = False  # prevent critic gradients from updating encoder/GRU
 
     # --- PPO / MAPPO ---
     lr: float = 3e-4
+    lr_anneal: bool = False  # linearly decay lr to min_lr over total_updates
+    min_lr: float = 0.0
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2
+    target_kl: float = 0.03  # early-stop PPO epoch if approx_kl exceeds this (0 disables)
     ppo_epochs: int = 4
     bptt_len: int = 32  # truncated BPTT segment length
     value_loss_coef: float = 0.5
+    vf_clip_eps: float = 0.2  # value clipping epsilon (0 disables)
     entropy_coef: float = 0.01
     max_grad_norm: float = 0.5
     conflict_loss_coef: float = 0.0

@@ -16,6 +16,10 @@ class UpdateStats:
     value_loss: float
     entropy: float
     conflict_loss: float
+    approx_kl: float
+    clip_frac: float
+    grad_norm: float
+    epochs_run: int
 
 
 class MAPPOTrainer:
@@ -25,9 +29,11 @@ class MAPPOTrainer:
         agent: GACMACAgent,
         optimizer: torch.optim.Optimizer,
         clip_eps: float,
+        target_kl: float,
         ppo_epochs: int,
         bptt_len: int,
         value_loss_coef: float,
+        vf_clip_eps: float,
         entropy_coef: float,
         conflict_loss_coef: float,
         max_grad_norm: float,
@@ -36,9 +42,11 @@ class MAPPOTrainer:
         self.agent = agent
         self.optimizer = optimizer
         self.clip_eps = float(clip_eps)
+        self.target_kl = float(target_kl)
         self.ppo_epochs = int(ppo_epochs)
         self.bptt_len = int(bptt_len)
         self.value_loss_coef = float(value_loss_coef)
+        self.vf_clip_eps = float(vf_clip_eps)
         self.entropy_coef = float(entropy_coef)
         self.conflict_loss_coef = float(conflict_loss_coef)
         self.max_grad_norm = float(max_grad_norm)
@@ -72,11 +80,20 @@ class MAPPOTrainer:
         total_value = 0.0
         total_entropy = 0.0
         total_conflict = 0.0
+        total_kl = 0.0
+        total_clip_frac = 0.0
+        total_grad_norm = 0.0
         steps = 0
+        epochs_run = 0
 
+        seg_starts = list(range(0, T, self.bptt_len))
         for _epoch in range(self.ppo_epochs):
-            seg_start = 0
-            while seg_start < T:
+            epochs_run += 1
+            # Shuffle BPTT segments each epoch to reduce update bias.
+            perm = torch.randperm(len(seg_starts))
+            early_stop = False
+            for p in perm.tolist():
+                seg_start = seg_starts[p]
                 seg_end = min(T, seg_start + self.bptt_len)
 
                 # Truncated BPTT boundary: start hidden is treated as constant.
@@ -114,6 +131,7 @@ class MAPPOTrainer:
                 conflict_seg = torch.stack(conflicts, dim=0).mean() if conflicts else torch.zeros((), device=self.device)
 
                 old_logp_seg = old_logp[seg_start:seg_end].to(self.device)
+                old_values_seg = torch.stack(batch.values[seg_start:seg_end], dim=0).to(self.device)
                 adv_seg = advantages[seg_start:seg_end].to(self.device)
                 ret_seg = returns[seg_start:seg_end].to(self.device)
 
@@ -122,7 +140,17 @@ class MAPPOTrainer:
                 surr2 = torch.clamp(ratio, 1.0 - self.clip_eps, 1.0 + self.clip_eps) * adv_seg
                 actor_loss = -torch.min(surr1, surr2).mean()
 
-                value_loss = F.mse_loss(values_seg, ret_seg)
+                if self.vf_clip_eps > 0.0:
+                    v_clipped = old_values_seg + torch.clamp(
+                        values_seg - old_values_seg,
+                        -self.vf_clip_eps,
+                        self.vf_clip_eps,
+                    )
+                    v_loss1 = (values_seg - ret_seg).pow(2)
+                    v_loss2 = (v_clipped - ret_seg).pow(2)
+                    value_loss = 0.5 * torch.max(v_loss1, v_loss2).mean()
+                else:
+                    value_loss = F.mse_loss(values_seg, ret_seg)
                 entropy = entropy_seg.mean()
 
                 loss = (
@@ -132,9 +160,12 @@ class MAPPOTrainer:
                     + self.conflict_loss_coef * conflict_seg
                 )
 
+                approx_kl = (old_logp_seg - new_logp_seg).mean()
+                clip_frac = (torch.abs(ratio - 1.0) > self.clip_eps).to(dtype=loss.dtype).mean()
+
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.agent.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
                 total_loss += float(loss.item())
@@ -142,9 +173,17 @@ class MAPPOTrainer:
                 total_value += float(value_loss.item())
                 total_entropy += float(entropy.item())
                 total_conflict += float(conflict_seg.item())
+                total_kl += float(approx_kl.item())
+                total_clip_frac += float(clip_frac.item())
+                total_grad_norm += float(grad_norm.item()) if torch.isfinite(grad_norm) else float("nan")
                 steps += 1
 
-                seg_start = seg_end
+                if self.target_kl > 0.0 and float(approx_kl.item()) > self.target_kl:
+                    early_stop = True
+                    break
+
+            if early_stop:
+                break
 
         denom = max(1, steps)
         return UpdateStats(
@@ -153,4 +192,8 @@ class MAPPOTrainer:
             value_loss=total_value / denom,
             entropy=total_entropy / denom,
             conflict_loss=total_conflict / denom,
+            approx_kl=total_kl / denom,
+            clip_frac=total_clip_frac / denom,
+            grad_norm=total_grad_norm / denom,
+            epochs_run=epochs_run,
         )
