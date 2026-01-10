@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gac-neighbor-last-action-mask", action="store_true", help="Enable GAC execution-time neighbor last-action mask.")
     p.add_argument("--gac-neighbor-last-action-penalty", type=float, default=None, help="Enable GAC execution-time neighbor last-action penalty.")
     p.add_argument("--gac-agent-id-tiebreak-eps", type=float, default=None, help="Override GAC agent-id tiebreak epsilon at execution.")
-    p.add_argument("--plot-style", type=str, default="facets", choices=["facets", "lines"], help="Plot style for density correlation.")
+    p.add_argument("--plot-style", type=str, default="paper", choices=["paper", "lines"], help="Plot style for density correlation.")
     p.add_argument("--run-name", type=str, default="density", help="Run name used for output dir.")
     p.add_argument("--results-dir", type=str, default="runs_density", help="Output root dir.")
     p.add_argument("--out", type=str, default=None, help="Optional output png path (overrides run dir).")
@@ -347,37 +347,11 @@ def main() -> None:
         plot_density_lines(xs=xs_density_km2, results_by_algo=results_by_algo, save_path=out_png)
         out_files.append(out_png)
     else:
-        from gac_mac.viz.plots import plot_density_facets
+        from gac_mac.viz.plots import plot_density_paper
 
-        plot_density_facets(
-            xs=xs_density_km2,
-            results_by_algo=results_by_algo,
-            metric="sum_rate_mbps",
-            y_label="Throughput (Mbps/frame)",
-            save_path=out_base + "_thr.png",
-            sort_by_last=True,
-        )
-        out_files.append(out_base + "_thr.png")
-        plot_density_facets(
-            xs=xs_density_km2,
-            results_by_algo=results_by_algo,
-            metric="collision_rate",
-            y_label="Collision rate",
-            y_lim=(0.0, 1.0),
-            save_path=out_base + "_coll.png",
-            sort_by_last=False,
-        )
-        out_files.append(out_base + "_coll.png")
-        plot_density_facets(
-            xs=xs_density_km2,
-            results_by_algo=results_by_algo,
-            metric="jain",
-            y_label="Jain",
-            y_lim=(0.0, 1.0),
-            save_path=out_base + "_jain.png",
-            sort_by_last=False,
-        )
-        out_files.append(out_base + "_jain.png")
+        out_png = out_base + "_paper.png"
+        plot_density_paper(xs=xs_density_km2, results_by_algo=results_by_algo, save_path=out_png)
+        out_files.append(out_png)
     for p in out_files:
         print(f"saved: {p}")
     print(f"saved: {out_json}")

@@ -363,6 +363,14 @@
   - `runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density_jain.png`
   - 数据：`runs_density\\mc6L2_paperAligned_facets-20260110-181607\\density.json`
 
+## 2026-01-10 (论文风格单图：同图三子图 + 末端标注减少交叉干扰)
+
+- 调整：不再按“每算法一个子图”，改为论文常见的“同一张图三子图（吞吐/碰撞/Jain），所有算法同轴对比”，并用末端标注替代大图例，突出 GAC-MAC 与 Greedy，其他曲线淡化。
+  - 代码：`gac_mac/viz/plots.py` 的 `plot_density_paper()`，`gac_mac/scripts/benchmark_density.py --plot-style paper`
+- 示例输出：
+  - `runs_density\\mc6L2_paperStyle-20260110-200641\\density_paper.png`
+  - 数据：`runs_density\\mc6L2_paperStyle-20260110-200641\\density.json`
+
 ## 2026-01-10 (高密度碰撞优化：dense-80 微调得到更低 coll)
 
 - 现象：在高密度（N=80）下，collision 明显恶化，根因是 primary 资源仍会被多节点同时选择，secondary_lbt 只能抑制 secondary 冲突。

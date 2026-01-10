@@ -151,56 +151,93 @@ def plot_density_lines(
     plt.close()
 
 
-def plot_density_facets(
+def plot_density_paper(
     *,
     xs: list[float],
     results_by_algo: dict[str, dict[str, list[float]]],
-    metric: str,
     save_path: str,
-    y_label: str | None = None,
-    y_lim: tuple[float, float] | None = None,
-    sort_by_last: bool = True,
+    title: str | None = None,
 ) -> None:
-    """Facet plot: one small subplot per algorithm (reduces line crossing clutter)."""
-    import math
-
+    """Paper-style plot: 3 subplots (thr/coll/jain) with consistent styling and end labels."""
     import matplotlib.pyplot as plt
 
+    plt.rcParams.update(
+        {
+            "font.size": 10,
+            "axes.titlesize": 11,
+            "axes.labelsize": 10,
+            "legend.fontsize": 9,
+            "lines.linewidth": 2.0,
+        }
+    )
+
+    def _end_label(ax, x: float, y: float, text: str, color: str, dy: float = 0.0) -> None:
+        ax.text(x, y + dy, text, color=color, fontsize=9, va="center")
+
+    # Stable ordering to keep labels consistent.
     names = list(results_by_algo.keys())
-    if sort_by_last:
-        def _last(name: str) -> float:
-            ys = results_by_algo.get(name, {}).get(metric, [])
-            return float(ys[-1]) if ys else float("-inf")
+    if "GAC-MAC" in names:
+        names.remove("GAC-MAC")
+        names = ["GAC-MAC"] + sorted(names)
+    else:
+        names = sorted(names)
 
-        names = sorted(names, key=_last, reverse=True)
+    # Color/style map: emphasize proposed + key baselines, fade others.
+    palette = {
+        "GAC-MAC": ("#d62728", "-"),  # red
+        "Greedy": ("#000000", "--"),  # black dashed
+        "CSMA": ("#1f77b4", "-."),  # blue dash-dot
+        "TDMA": ("#2ca02c", ":"),  # green dotted
+        "ALOHA": ("#9467bd", ":"),  # purple dotted
+        "SATMAC": ("#ff7f0e", "--"),  # orange dashed
+        "H-SAT": ("#8c564b", "--"),  # brown dashed
+        "Random": ("#7f7f7f", ":"),  # gray dotted
+    }
 
-    n = len(names)
-    if n == 0:
-        return
-    cols = 4
-    rows = int(math.ceil(n / cols))
+    def _style(name: str) -> tuple[str, str, float]:
+        color, ls = palette.get(name, ("#7f7f7f", ":"))
+        alpha = 1.0 if name in {"GAC-MAC", "Greedy"} else 0.75
+        return color, ls, alpha
 
-    fig, axes = plt.subplots(rows, cols, figsize=(4.0 * cols, 2.6 * rows), squeeze=False)
-    for idx, name in enumerate(names):
-        r = idx // cols
-        c = idx % cols
-        ax = axes[r][c]
-        ys = results_by_algo[name].get(metric, [])
-        ax.plot(xs, ys, marker="o", linewidth=2.0, color="steelblue")
-        ax.set_title(name)
-        ax.grid(True, alpha=0.3)
-        ax.set_xlabel("Density (nodes/km^2)")
-        if y_label:
-            ax.set_ylabel(y_label)
-        if y_lim is not None:
-            ax.set_ylim(float(y_lim[0]), float(y_lim[1]))
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.0))
+    ax_thr, ax_coll, ax_jain = axes
 
-    # Hide unused axes
-    for j in range(n, rows * cols):
-        r = j // cols
-        c = j % cols
-        axes[r][c].axis("off")
+    for ax in axes:
+        ax.grid(True, alpha=0.25)
+        ax.set_xlabel("Density (nodes/km$^2$)")
 
+    ax_thr.set_title("Throughput")
+    ax_thr.set_ylabel("Mbps / frame")
+    ax_coll.set_title("Collision Rate")
+    ax_coll.set_ylabel("collisions / attempts")
+    ax_coll.set_ylim(0.0, 1.0)
+    ax_jain.set_title("Fairness")
+    ax_jain.set_ylabel("Jain's Index")
+    ax_jain.set_ylim(0.0, 1.0)
+
+    x_end = float(xs[-1]) if xs else 0.0
+    for name in names:
+        m = results_by_algo.get(name, {})
+        thr = m.get("sum_rate_mbps", [])
+        coll = m.get("collision_rate", [])
+        jain = m.get("jain", [])
+        color, ls, alpha = _style(name)
+
+        lw = 2.8 if name == "GAC-MAC" else (2.3 if name == "Greedy" else 1.8)
+        ax_thr.plot(xs, thr, linestyle=ls, color=color, alpha=alpha, linewidth=lw)
+        ax_coll.plot(xs, coll, linestyle=ls, color=color, alpha=alpha, linewidth=lw)
+        ax_jain.plot(xs, jain, linestyle=ls, color=color, alpha=alpha, linewidth=lw)
+
+        # End labels (remove need for a cluttered legend).
+        if xs and thr:
+            _end_label(ax_thr, x_end, float(thr[-1]), name, color, dy=0.0)
+        if xs and coll:
+            _end_label(ax_coll, x_end, float(coll[-1]), name, color, dy=0.0)
+        if xs and jain:
+            _end_label(ax_jain, x_end, float(jain[-1]), name, color, dy=0.0)
+
+    if title:
+        fig.suptitle(title)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
+    plt.savefig(save_path, dpi=200)
     plt.close()
