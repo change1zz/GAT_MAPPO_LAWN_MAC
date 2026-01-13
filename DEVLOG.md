@@ -393,3 +393,29 @@
   - `GAC-MAC thr 1.533 Mbps | jain 0.020 | coll 0.988 | delay 14.137`
   - 同口径 baselines（由 evaluate 输出）：`Greedy thr 117.909 Mbps | coll 0.104`, `Random thr 75.491 Mbps | coll 0.558`, `CSMA thr 33.731 Mbps | coll 0.123`
 - 结论：纯 CE 模仿在当前“分布式可观测”条件下很难拟合集中式 Greedy（teacher 依赖全局冲突信息），需要更强的监督信号（例如 teacher 的局部可见版本、或把 imitation 改为 ranking/energy-based loss）。
+
+## 2026-01-10（备份 + 重新训练尝试：以结果为准）
+
+- 说明：仓库内未找到用户提到的 `对话上下文-argmax优化-进行中.md`（已全仓库搜索 `*对话*/*优化*/*进行中*` 无结果），后续以 `plan.md/requirement.md/DEVLOG.md` 与现有代码状态为准。
+- 备份（训练前锁定当前最好版本与关键产物）：
+  - 目录：`backup\\keep_before_retrain_20260110-202431\\`
+  - 内容：
+    - `ckpt_best_argmax_mc6L2_Ntrain30.pth`（来自 `runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\checkpoints\\checkpoint_best_argmax.pth`）
+    - `ckpt_best_argmax_mc6L2_dense80_finetune.pth`（来自 `runs_collfocus\\mc6L2_dense80_finetune-20260110-173923\\checkpoints\\checkpoint_best_argmax.pth`）
+    - `density_paper_mc6L2_20260110.png` + `density_mc6L2_20260110.json`（来自 `runs_density\\mc6L2_paperStyle-20260110-200641\\`）
+    - `DEVLOG_snapshot.md`
+- 重新训练/长训练尝试（均未启用 `primary_lbt`；仍以 `secondary_lbt` 抑制 secondary 冲突）：
+  - 尝试 A（从零开始 + 约束）：`--target-coll/--attempt-penalty/--parallel-env` 组合在 dense-80 容易学到 “NoTx” 策略（评估 thr=0），放弃。
+  - 尝试 B（从 best_ckpt 微调 + `reward_mode=mbps`）：值函数尺度不匹配导致 value loss/grad 爆炸、吞吐显著退化，放弃。
+  - 尝试 C（从 best_ckpt 微调 + collision Lagrange + `cs_threshold=-60`）：实际评估 collision 未下降，反而上升（见下方对比），放弃。
+- 现阶段保留的最佳 dense-80 结果（200 eps, argmax, baselines 单次发送对齐 `--baseline-max-tx 1`）：
+  - `conda run -n intelligent_AJ python -m gac_mac.scripts.evaluate --checkpoint runs_collfocus\\mc6L2_dense80_finetune-20260110-173923\\checkpoints\\checkpoint_best_argmax.pth --episodes 200 --seed 123 --policy argmax --device cuda --num-uavs 80 --secondary-lbt --baseline-max-tx 1`
+  - `GAC-MAC thr 174.344 Mbps | coll 0.260 | jain 0.578`
+- 新生成的论文风格密度图（提示：该图中 baselines 仍按 `--baseline-max-tx 1`，而该 checkpoint 是 `L=2` 策略，动作自由度不一致；若要严格公平需让 baselines 也具备 L>1 的决策或将 GAC 限制到 L=1）：
+  - `runs_density\\mc6L2_dense80best_paper_20260110-233449-20260110-233740\\density_paper.png`
+  - `runs_density\\mc6L2_dense80best_paper_20260110-233449-20260110-233740\\density.json`
+- 清理：保留 `runs_collfocus\\mc6L2_dense80_finetune-20260110-173923\\` 与 `runs_collfocus\\mc6_L2_nlap02_conf05_argmax-20260109-183430\\` 两个有效版本，其余本轮失败/中间 run 已删除（避免目录膨胀）。
+
+## 2026-01-11（ns-3 复现技术文档）
+
+- 新增：`NS3_TECHNICAL_DOCUMENTATION.md`（把当前实现的环境/动作/观测/奖励/训练算法/baselines/评测绘图/最佳产物与 ns-3 映射整理成可复现的技术说明书）。
